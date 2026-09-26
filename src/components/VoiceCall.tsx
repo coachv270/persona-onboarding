@@ -7,7 +7,7 @@ import {
   type DisconnectionDetails,
 } from "@elevenlabs/react";
 import { describeState, reducer, type Action, type OnboardingState } from "@/lib/onboarding";
-import { voiceFirstMessage, voiceSystemPrompt } from "@/lib/prompts";
+import { voiceFirstMessage } from "@/lib/prompts";
 
 interface Props {
   state: OnboardingState;
@@ -115,16 +115,13 @@ export function VoiceCall({ state, dispatch, onTranscript, onEnded, onDecline }:
       conversation.startSession({
         conversationToken: token,
         connectionType: "webrtc",
-        overrides: {
-          agent: {
-            prompt: { prompt: voiceSystemPrompt(snapshot) },
-            firstMessage: voiceFirstMessage(snapshot),
-          },
-        },
+        // The system prompt lives in the ElevenLabs dashboard (docs/VOICE_AGENT.md);
+        // we only fill its variables, plus a tailored greeting for callbacks.
         dynamicVariables: {
           agent_name: snapshot.agentName ?? "your assistant",
-          user_name: snapshot.userName ?? "",
+          known_info: describeState(snapshot),
         },
+        overrides: { agent: { firstMessage: voiceFirstMessage(snapshot) } },
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);

@@ -29,9 +29,9 @@ In https://console.cloud.google.com:
 
 https://elevenlabs.io/app/agents → **Create agent → Blank**.
 
-- **Agent**: pick a voice; LLM = a Gemini Flash model. System prompt / first message can be placeholders — the app overrides both at call start from `src/lib/prompts.ts`.
+- **Agent**: pick a voice; LLM = a Gemini Flash model. Paste the system prompt and first message from [VOICE_AGENT.md](VOICE_AGENT.md). The app fills `{{agent_name}}` and `{{known_info}}` at call start.
 - **Security**:
-  - Enable **overrides** for **System prompt** and **First message**.
+  - Enable the **First message** override (the app swaps in a "sorry we got cut off" greeting on callbacks).
   - Enable **authentication** (private agent). The app mints a WebRTC conversation token server-side via `/api/voice-token`.
 - **Tools → Add tool → Client tool** (tick **Wait for response** on each; names are case-sensitive and must match `src/components/VoiceCall.tsx`):
 

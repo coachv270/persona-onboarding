@@ -7,12 +7,13 @@ The system prompt and first message for the Persona onboarding call. Paste them 
 | Variable | Example test value | Meaning |
 |---|---|---|
 | `agent_name` | `Nova` | The name the user gave the assistant in text chat (always set before a call). |
-| `user_name` | `Alex` or empty | The user's name if already known. |
-| `known_info` | `User name: Alex. Gmail: not connected. Help needed: unknown.` | Everything collected so far, in plain English. |
+| `known_info` | `User name: Alex. Gmail: not connected. Help needed: unknown.` | Everything collected so far, in plain English (`describeState()` in `src/lib/onboarding.ts`). |
 
 In the console, set test values for these under the agent's dynamic variables before starting a test call.
 
 ## First message
+
+On a callback after a dropped call, the app overrides this with a "sorry we got cut off" greeting (`voiceFirstMessage()` in `src/lib/prompts.ts`).
 
 ```
 Hey, it's {{agent_name}}! Thanks for picking up. Do you have a couple of minutes so I can get to know you?
