@@ -28,6 +28,10 @@ export const chatTools = {
   }),
   findEmails: clientTool("Search all mail, including archived and read (Gmail search syntax; don't add in:inbox unless asked). Returns up to 5 matches with ids.", { query: z.string() }),
   readEmail: clientTool("Open one email by id (from findEmails/summarizeInbox).", { id: z.string() }),
+  saveDraft: clientTool(
+    "Save the latest draft on screen (including the user's edits) to Gmail Drafts. Only when they ask to save it. Never sends.",
+    {},
+  ),
   showDraft: clientTool("Show a reply draft on screen for the user to edit, copy or save to Gmail Drafts. Never sends.", {
     messageId: z.string().describe("id of the email being replied to"),
     body: z.string().describe("the reply text, plain"),

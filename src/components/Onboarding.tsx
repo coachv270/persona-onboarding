@@ -68,7 +68,9 @@ const FIELD_LABEL: Record<TextField, string> = {
   helpNeed: "what they need help with",
 };
 
-type DraftItem = Draft & { status: "idle" | "saving" | "saved" | "error"; error?: string };
+// "permission": a voice/chat save needs the one-time drafts permission, which
+// only a click can grant (Google popup).
+type DraftItem = Draft & { status: "idle" | "saving" | "saved" | "error" | "permission"; error?: string };
 
 export function Onboarding({
   initialState,
@@ -97,6 +99,10 @@ export function Onboarding({
   const [gmailError, setGmailError] = useState<string | null>(null);
   const [needReconnect, setNeedReconnect] = useState(false);
   const [drafts, setDrafts] = useState<DraftItem[]>([]);
+  const draftsRef = useRef(drafts);
+  useLayoutEffect(() => {
+    draftsRef.current = drafts;
+  }, [drafts]);
   const [input, setInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const voice = useConversationControls();
@@ -188,6 +194,11 @@ export function Onboarding({
       case "readEmail":
       case "showDraft":
         return handleMail(await runMail(name, input, detail));
+      case "saveDraft": {
+        const d = [...draftsRef.current].reverse().find((x) => x.status !== "saved");
+        if (!d) return "There's no unsaved draft on screen. Offer to write one first.";
+        return persistDraft(d, false);
+      }
       default:
         devlog("error", `Unknown tool: ${name}`);
         return `Unknown tool ${name}.`;
@@ -397,9 +408,16 @@ export function Onboarding({
   const updateDraft = (id: string, patch: Partial<DraftItem>) =>
     setDrafts((ds) => ds.map((d) => (d.id === id ? { ...d, ...patch } : d)));
 
-  const saveDraft = async (d: DraftItem) => {
-    // Compose permission is only requested here, on click (popup first).
+  // Saves a draft to Gmail Drafts (never sends). Shared by the Save button and
+  // the saveDraft tool (voice/chat). The one-time compose permission needs a
+  // Google popup, which only a click can open.
+  const persistDraft = async (d: DraftItem, viaClick: boolean): Promise<string> => {
     const needCompose = !(gmailStore.get().scopes ?? []).includes(COMPOSE);
+    if (needCompose && !viaClick) {
+      updateDraft(d.id, { status: "permission", error: undefined });
+      devlog("gmail", "Voice/chat save needs the one-time drafts permission (click)");
+      return "Saving needs a one-time permission that only a click can grant. The Save to Gmail Drafts button is highlighted; ask them to click it once. After that, saving by voice works.";
+    }
     const codeP = needCompose ? requestAuthCode({ scope: COMPOSE, hint: stateRef.current.userEmail }) : null;
     updateDraft(d.id, { status: "saving", error: undefined });
     try {
@@ -409,13 +427,17 @@ export function Onboarding({
       if (r.needs) throw new Error(r.text);
       updateDraft(d.id, { status: "saved" });
       devlog("gmail", `Draft saved to Gmail Drafts (reply to ${d.to.replace(/.*</, "<")})`);
-      notifyAgents("The user saved the reply to their Gmail Drafts. It was NOT sent.", { chat: false });
+      if (viaClick) notifyAgents("The user saved the reply to their Gmail Drafts. It was NOT sent.", { chat: false });
+      return "Saved to Gmail Drafts. It was NOT sent. Tell them it's in their Drafts, ready to review and send themselves.";
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       devlog("error", `Save draft: ${message}`);
       updateDraft(d.id, { status: "error", error: message });
+      return `Saving failed (${message}). Apologize and suggest the Save button.`;
     }
   };
+
+  const saveDraft = (d: DraftItem) => void persistDraft(d, true);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -940,7 +962,9 @@ function DraftCard({
         <button
           onClick={onSave}
           disabled={draft.status === "saving" || draft.status === "saved"}
-          className="rounded-full bg-foreground text-background px-3 py-1.5 text-xs font-medium disabled:opacity-60"
+          className={`rounded-full bg-foreground text-background px-3 py-1.5 text-xs font-medium disabled:opacity-60 ${
+            draft.status === "permission" ? "ring-4 ring-imblue/50 animate-pulse" : ""
+          }`}
         >
           {draft.status === "saving" ? "Saving…" : draft.status === "saved" ? "Saved to Gmail Drafts ✓" : "Save to Gmail Drafts"}
         </button>
@@ -953,6 +977,9 @@ function DraftCard({
           {draft.status === "saved" ? "Dismiss" : "Discard"}
         </button>
       </div>
+      {draft.status === "permission" && (
+        <p className="text-xs text-imblue">One click needed: allow drafts access once. After that you can just say &ldquo;save it&rdquo;.</p>
+      )}
       {draft.error && <p className="text-xs text-red-600">{draft.error}</p>}
     </div>
   );

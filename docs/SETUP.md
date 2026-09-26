@@ -50,6 +50,7 @@ https://elevenlabs.io/app/agents → **Create agent → Blank**.
   | `findEmails` | `query` | 20 s |
   | `readEmail` | `id` | 20 s |
   | `showDraft` | `messageId`, `body` | 20 s |
+  | `saveDraft` | none | 20 s |
 
   All parameters are strings. The quickest way is **Edit as JSON** with the template in [VOICE_AGENT.md](VOICE_AGENT.md).
 

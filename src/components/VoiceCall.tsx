@@ -47,6 +47,12 @@ function failureReason(message: string): string {
     : "the call couldn't connect";
 }
 
+// The voice model sometimes wraps replies in tags like <Jenny>…</Jenny>; keep
+// captions and the transcript clean.
+function cleanSpoken(text: string): string {
+  return text.replace(/<\/?[A-Za-z][\w .'-]{0,40}>/g, "").replace(/\s{2,}/g, " ").trim();
+}
+
 async function fetchToken(): Promise<string> {
   const res = await fetch("/api/voice-token", { cache: "no-store" });
   const body = await res.json();
@@ -84,7 +90,9 @@ export function VoiceCall({ state, dispatch, hasToken, autoStart, runTool, onCon
       devlog("voice", `Disconnected (${details.reason})`, details);
       finish(describeDisconnect(details));
     },
-    onMessage: ({ role, message }) => {
+    onMessage: ({ role, message: raw }) => {
+      const message = cleanSpoken(raw);
+      if (!message) return;
       devlog("voice", `🎙 ${role === "user" ? "user" : (stateRef.current.agentName ?? "agent")} (spoken): ${message}`);
       setLines((prev) => [...prev.slice(-2), { role, text: message }]);
       onTranscript(role, message);
@@ -115,6 +123,7 @@ export function VoiceCall({ state, dispatch, hasToken, autoStart, runTool, onCon
   useConversationClientTool("findEmails", tool("findEmails"));
   useConversationClientTool("readEmail", tool("readEmail"));
   useConversationClientTool("showDraft", tool("showDraft"));
+  useConversationClientTool("saveDraft", tool("saveDraft"));
 
   // Prefetch the token while ringing so "Answer" starts audio inside the click
   // gesture — Safari won't unlock audio after an extra network round trip.
