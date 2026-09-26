@@ -17,7 +17,7 @@ In https://console.cloud.google.com:
    - **Branding**: app name + support email.
    - **Audience**: **External**, publishing status **Testing**. (Not "Internal" — reviewers outside the Workspace domain couldn't sign in.)
    - **Test users**: add every Google account that will try the demo (max 100). Anyone else gets `access_denied`.
-   - **Data access**: add `https://www.googleapis.com/auth/gmail.readonly`.
+   - **Data access**: add `https://www.googleapis.com/auth/gmail.readonly` and `https://www.googleapis.com/auth/gmail.compose` (compose is requested only when the user clicks Save to Gmail Drafts).
 4. **Clients → Create client → Web application**:
    - **Authorized JavaScript origins**: `http://localhost:3000` and `https://<your-app>.vercel.app`.
    - **Authorized redirect URIs**: none — the popup token flow doesn't use them.
@@ -29,19 +29,27 @@ In https://console.cloud.google.com:
 
 https://elevenlabs.io/app/agents → **Create agent → Blank**.
 
-- **Agent**: pick a voice; LLM = a Gemini Flash model. Paste the system prompt and first message from [VOICE_AGENT.md](VOICE_AGENT.md). The app fills `{{agent_name}}` and `{{known_info}}` at call start.
+- **Agent**: pick a voice; LLM = a Gemini Flash model. Set the first message from [VOICE_AGENT.md](VOICE_AGENT.md), then push the prompt with `npm run sync:voice` (pasting into the editor is unreliable). The app fills `{{agent_name}}` and `{{known_info}}` at call start.
 - **Security**:
   - Enable the **First message** override (the app always sends a greeting that fits what's already known).
   - Enable **authentication** (private agent). The app mints a WebRTC conversation token server-side via `/api/voice-token`.
 - **Tools → Add tool → Client tool** (tick **Wait for response** on each; names are case-sensitive and must match `src/components/VoiceCall.tsx`):
 
-  | Name | Description | Parameters |
+  | Name | Parameters | Timeout |
   |---|---|---|
-  | `setAgentName` | Save the name the user picks for the assistant. | `name` — string, required |
-  | `setUserName` | Save the user's name as soon as they say it. | `name` — string, required |
-  | `setHelpNeed` | Save something concrete the user wants help with. | `need` — string, required |
-  | `showGmailButton` | Show a "Connect Gmail" button on the user's screen. | — |
-  | `graduate` | Onboarding is complete, or the user wants to skip ahead. | — |
+  | `setAgentName` | `name` | 5 s |
+  | `setUserName` | `name` | 5 s |
+  | `setUserEmail` | `email` | 5 s |
+  | `setHelpNeed` | `need` | 5 s |
+  | `showGmailButton` | none | 5 s |
+  | `declineGmail` | none | 5 s |
+  | `graduate` (stop setup questions; never ends the call) | none | 5 s |
+  | `summarizeInbox` | `after`, `before` (optional) | 20 s |
+  | `findEmails` | `query` | 20 s |
+  | `readEmail` | `id` | 20 s |
+  | `showDraft` | `messageId`, `body` | 20 s |
+
+  All parameters are strings. The quickest way is **Edit as JSON** with the template in [VOICE_AGENT.md](VOICE_AGENT.md).
 
 - **System tools**: enable **End call**.
 - **Advanced** (optional): lower the turn timeout / silence end-call timeout so a silent user gets re-prompted or disconnected gracefully.

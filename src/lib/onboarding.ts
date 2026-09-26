@@ -1,6 +1,7 @@
-// Single source of truth for onboarding progress. Both the text chat (Gemini)
-// and the voice call (ElevenLabs) read and write this same object, so the user
-// can hop between channels — or hang up — without losing anything.
+// Single source of truth for the user's profile and what the assistant can do.
+// Text chat (Gemini), the voice call (ElevenLabs) and the on-screen fields all
+// read and write this same object, so the user can hop between channels — or
+// hang up — without losing anything.
 
 export type GmailStatus = "not_asked" | "offered" | "connected" | "declined";
 export type CallStatus = "idle" | "connecting" | "active" | "ended";
@@ -15,6 +16,9 @@ export interface GmailState {
 export interface OnboardingState {
   agentName: string | null;
   userName: string | null;
+  userEmail: string | null;
+  // "google" wins over anything typed or spoken.
+  userEmailSource?: "user" | "google";
   helpNeed: string | null;
   gmail: GmailState;
   call: {
@@ -22,12 +26,14 @@ export interface OnboardingState {
     attempts: number;
     lastEndReason?: string;
   };
+  // Setup finished or skipped: stop asking for profile details. Never gates features.
   graduated: boolean;
 }
 
 export const initialState: OnboardingState = {
   agentName: null,
   userName: null,
+  userEmail: null,
   helpNeed: null,
   gmail: { status: "not_asked" },
   call: { status: "idle", attempts: 0 },
@@ -37,6 +43,7 @@ export const initialState: OnboardingState = {
 export type Action =
   | { type: "setAgentName"; value: string }
   | { type: "setUserName"; value: string }
+  | { type: "setUserEmail"; value: string; source: "user" | "google" }
   | { type: "setHelpNeed"; value: string }
   | { type: "gmail"; value: Partial<GmailState> }
   | { type: "callConnecting" }
@@ -51,6 +58,10 @@ export function reducer(state: OnboardingState, action: Action): OnboardingState
       return { ...state, agentName: action.value.trim() };
     case "setUserName":
       return { ...state, userName: action.value.trim() };
+    case "setUserEmail":
+      // A typed/spoken address never overrides the connected Google account.
+      if (state.userEmailSource === "google" && action.source === "user") return state;
+      return { ...state, userEmail: action.value, userEmailSource: action.source };
     case "setHelpNeed":
       return { ...state, helpNeed: action.value.trim() };
     case "gmail":
@@ -68,12 +79,13 @@ export function reducer(state: OnboardingState, action: Action): OnboardingState
   }
 }
 
-export type Slot = "agentName" | "userName" | "gmail" | "helpNeed";
+export type Slot = "agentName" | "userName" | "userEmail" | "gmail" | "helpNeed";
 
 export function missingSlots(s: OnboardingState): Slot[] {
   const missing: Slot[] = [];
   if (!s.agentName) missing.push("agentName");
   if (!s.userName) missing.push("userName");
+  if (!s.userEmail) missing.push("userEmail");
   // A declined Gmail counts as resolved — we don't nag, but may re-offer once.
   if (s.gmail.status !== "connected" && s.gmail.status !== "declined") missing.push("gmail");
   if (!s.helpNeed) missing.push("helpNeed");
@@ -86,6 +98,7 @@ export function describeState(s: OnboardingState): string {
   const lines = [
     `Agent name: ${s.agentName ?? "(not chosen yet)"}`,
     `User name: ${s.userName ?? "(unknown)"}`,
+    `Email: ${s.userEmail ? `${s.userEmail}${s.userEmailSource === "google" ? " (from their Google account)" : ""}` : "(unknown)"}`,
     `Gmail: ${
       s.gmail.status === "connected"
         ? `connected (${s.gmail.email ?? "address unknown"})`
@@ -100,8 +113,36 @@ export function describeState(s: OnboardingState): string {
     lines.push(`The last voice call ended (${s.call.lastEndReason}).`);
   }
   const missing = missingSlots(s);
-  lines.push(`Still missing: ${missing.length ? missing.join(", ") : "nothing — ready to graduate"}`);
+  if (s.graduated) lines.push("Setup: finished or skipped. Don't ask for missing profile details.");
+  else lines.push(`Still missing: ${missing.length ? missing.join(", ") : "nothing, setup complete"}`);
   return lines.join("\n");
+}
+
+// Pure format check. Turning speech ("coach v at …") into an address is the
+// LLM's job; code only verifies the result.
+export function normalizeEmail(raw: string): string | null {
+  const v = raw.trim().toLowerCase().replace(/\s+/g, "");
+  return /^[^@]+@[^@]+\.[a-z]{2,}$/.test(v) && !v.includes("..") ? v : null;
+}
+
+export type MailAccess = "locked" | "unlocked" | "expired";
+
+// Progressive unlock: Gmail connected + a live token in this tab = mail commands.
+export function mailAccess(s: OnboardingState, hasToken: boolean): MailAccess {
+  if (s.gmail.status !== "connected") return "locked";
+  return hasToken ? "unlocked" : "expired";
+}
+
+export function describeCapabilities(s: OnboardingState, hasToken: boolean): string {
+  const mail = {
+    unlocked: "UNLOCKED. Use the mail tools now.",
+    locked: "LOCKED. Gmail isn't connected. Offer the Connect Gmail button; the user clicks it in their browser.",
+    expired: "NEEDS RECONNECT. Gmail was connected, but this browser session's access expired. Running a mail tool shows a Reconnect button.",
+  }[mailAccess(s, hasToken)];
+  return [
+    `Email help (summarize a period, find or read an email, draft a reply, never sent): ${mail}`,
+    "Always available: conversation, remembering profile details.",
+  ].join("\n");
 }
 
 const STORAGE_KEY = "persona-onboarding-v1";

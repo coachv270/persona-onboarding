@@ -4,14 +4,11 @@ Status snapshot as of **2026-09-26**.
 
 ## Goal
 
-Persona trial assignment: a conversational onboarding that collects:
-
-1. The agent (assistant) name
-2. The user's name
-3. A Gmail connection
-4. Something the user needs help with
-
-It should try a web voice call to collect everything except the agent name. It must survive user errors and hangups, must not feel like a form, must allow graduating early, and must be hosted.
+Persona trial assignment, now one universal assistant with progressive unlock:
+- It helps right away in text or voice. Setup (assistant name, user name, email, need, Gmail) happens in the background and never gates a request.
+- Email help unlocks once Gmail is connected: summarize a period, find or read an email, and draft replies that are never sent (Copy or Save to Gmail Drafts).
+- Names and emails can be spelled by voice or text; code validates the result.
+- It survives hangups and user errors, doesn't feel like a form, and is hosted.
 
 ## Stack
 
@@ -20,7 +17,7 @@ It should try a web voice call to collect everything except the agent name. It m
 | App / hosting | Next.js on Vercel |
 | Text | Vercel AI SDK v7 + Gemini (`gemini-flash-latest`), client-side tools (`/api/chat`) |
 | Voice | ElevenLabs Agents, `@elevenlabs/react` v1, WebRTC, conversation token from `/api/voice-token`, client tools |
-| Gmail | Google Identity Services popup token flow, `gmail.readonly`, headers only. `/api/insights` (Gemini) turns them into up to 3 ideas |
+| Gmail | Google Identity Services popup token flow (`gmail.readonly`; `gmail.compose` only for Save to Drafts). Search, read and draft in the browser via `mailCommands.ts` |
 | State | One reducer shared by chat and voice (`src/lib/onboarding.ts`), persisted in `localStorage` |
 
 ## Done
@@ -40,11 +37,21 @@ It should try a web voice call to collect everything except the agent name. It m
 - [x] Dev panel (top right): timestamped log of chat, tools, voice, state, Gmail and errors; "Clear local data" with confirmation.
 - [x] Gmail popup flow verified end to end on localhost.
 
+## Done on `feature/universal-assistant`
+
+- [x] One assistant, progressive unlock; no graduation screen or Skip ahead.
+- [x] Email slot + spelling (validated by `normalizeEmail`), Google account wins.
+- [x] Mail commands for chat and voice via one `runTool()`; search covers all received mail (archived and read included).
+- [x] Drafts: editable, Copy, Save to Gmail Drafts (compose scope on click). `gmail.compose` added in Google Cloud.
+- [x] Voice agent: 11 client tools published, unified prompt synced via `npm run sync:voice`.
+- [x] Persona-style UI (light, SF Pro/Inter, iMessage bubbles), help actions + numbered "How it works" on the right, compact mobile layout, voice lines tagged and calls marked with dividers.
+
 ## Remaining
 
-- [ ] ElevenLabs API key: grant **ElevenAgents write** (`convai_write`) permission. `/api/voice-token` currently returns 401 `missing_permissions`. Editing the existing key keeps its value, so there's no need to touch Vercel or `.env.local`.
-- [ ] Add reviewer emails as Google OAuth test users.
-- [ ] End-to-end test of voice + Gmail, then the stress scenarios: hang up mid-call, refuse Gmail, out-of-order answers, "just let me in", silence, mic denied.
+- [ ] End-to-end on localhost with Gmail: "summarize yesterday", find/read, draft → Save to Gmail Drafts (appears in the thread, unsent), reload → Reconnect.
+- [ ] Voice: "what came in today?" should call summarizeInbox (not answer from memory); spelling an email; "no Gmail" → declineGmail.
+- [ ] Add reviewer emails as Google test users.
+- [ ] Merge the branch to `main` (deploys to Vercel).
 
 ## `.env.local` status
 
@@ -57,7 +64,7 @@ It should try a web voice call to collect everything except the agent name. It m
 
 ## Notes / Gotchas
 
-- `VoiceCall.tsx` overrides `firstMessage` only on callbacks (after a dropped call); first calls use the dashboard first message. This relies on the First message override, which is enabled.
+- `VoiceCall.tsx` always overrides `firstMessage` with `voiceFirstMessage()` (adapts to what's known). Requires the First message override, which is enabled.
 - Client tools only run in the web app. In the ElevenLabs console they fail or time out (see [VOICE_AGENT.md](VOICE_AGENT.md#testing-in-the-console)).
 
 ## Related Docs

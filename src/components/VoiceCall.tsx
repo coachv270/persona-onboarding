@@ -6,15 +6,19 @@ import {
   useConversationClientTool,
   type DisconnectionDetails,
 } from "@elevenlabs/react";
-import { describeState, reducer, type Action, type OnboardingState } from "@/lib/onboarding";
-import { UNNAMED_AGENT, voiceFirstMessage } from "@/lib/prompts";
+import type { Action, OnboardingState } from "@/lib/onboarding";
+import { UNNAMED_AGENT, voiceContext, voiceFirstMessage } from "@/lib/prompts";
 import { devlog } from "@/lib/devlog";
 
 interface Props {
   state: OnboardingState;
   dispatch: Dispatch<Action>;
+  hasToken: boolean;
   // true: the user tapped "Call" (dial immediately); false: the text agent is ringing them.
   autoStart: boolean;
+  // Shared tool implementation (same as the chat's).
+  runTool: (name: string, input: Record<string, unknown>, detail: "voice" | "text") => Promise<string>;
+  onConnected: () => void;
   onTranscript: (role: "user" | "agent", text: string) => void;
   onEnded: (reason: string) => void;
   onDecline: () => void;
@@ -50,7 +54,7 @@ async function fetchToken(): Promise<string> {
   return body.token;
 }
 
-export function VoiceCall({ state, dispatch, autoStart, onTranscript, onEnded, onDecline, children }: Props) {
+export function VoiceCall({ state, dispatch, hasToken, autoStart, runTool, onConnected, onTranscript, onEnded, onDecline, children }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [lines, setLines] = useState<Line[]>([]);
   const [connectedAt, setConnectedAt] = useState<number | null>(null);
@@ -74,13 +78,14 @@ export function VoiceCall({ state, dispatch, autoStart, onTranscript, onEnded, o
       devlog("voice", "Connected", { conversationId });
       setConnectedAt(Date.now());
       dispatch({ type: "callActive" });
+      onConnected();
     },
     onDisconnect: (details) => {
       devlog("voice", `Disconnected (${details.reason})`, details);
       finish(describeDisconnect(details));
     },
     onMessage: ({ role, message }) => {
-      devlog("voice", `${role === "user" ? "user" : (stateRef.current.agentName ?? "agent")}: ${message}`);
+      devlog("voice", `🎙 ${role === "user" ? "user" : (stateRef.current.agentName ?? "agent")} (spoken): ${message}`);
       setLines((prev) => [...prev.slice(-2), { role, text: message }]);
       onTranscript(role, message);
     },
@@ -92,51 +97,24 @@ export function VoiceCall({ state, dispatch, autoStart, onTranscript, onEnded, o
     },
   });
 
-  // Apply the action locally too, so the tool result tells the agent the
-  // updated picture immediately (React state won't have re-rendered yet).
-  const apply = (action: Action) => {
-    dispatch(action);
-    stateRef.current = reducer(stateRef.current, action);
-    return describeState(stateRef.current);
+  // Thin wrappers: every tool runs the same shared implementation as the chat
+  // (Onboarding's runTool). Names must match the client tools on the ElevenLabs
+  // agent (docs/VOICE_AGENT.md). Params arrive untyped, so runTool coerces them.
+  const tool = (name: string) => (params: Record<string, unknown>) => {
+    devlog("tool", `voice → ${name}`, params);
+    return runTool(name, params, "voice");
   };
-
-  // Names must match the client tools configured on the ElevenLabs agent (docs/VOICE_AGENT.md).
-  // Params arrive untyped from the LLM, so coerce rather than trust them.
-  const logTool = (name: string, params: unknown) => devlog("tool", `voice → ${name}`, params);
-  useConversationClientTool("setAgentName", (p) => {
-    logTool("setAgentName", p);
-    return `Saved.\n${apply({ type: "setAgentName", value: String(p.name ?? "") })}`;
-  });
-  useConversationClientTool("setUserName", (p) => {
-    logTool("setUserName", p);
-    return `Saved.\n${apply({ type: "setUserName", value: String(p.name ?? "") })}`;
-  });
-  useConversationClientTool("setHelpNeed", (p) => {
-    logTool("setHelpNeed", p);
-    return `Saved.\n${apply({ type: "setHelpNeed", value: String(p.need ?? "") })}`;
-  });
-  useConversationClientTool("showGmailButton", () => {
-    logTool("showGmailButton", {});
-    apply({ type: "gmail", value: { status: "offered" } });
-    return "A 'Connect Gmail' button is now visible on the user's screen. Keep talking; you'll get an update when it's connected.";
-  });
-  useConversationClientTool("graduate", () => {
-    logTool("graduate", {});
-    apply({ type: "graduate" });
-    return "Onboarding complete. Say a short, warm goodbye, then end the call.";
-  });
-
-  // Gmail connects via a popup while the call keeps running — tell the agent.
-  const sentGmailUpdate = useRef(false);
-  useEffect(() => {
-    if (conversation.status !== "connected" || state.gmail.status !== "connected" || sentGmailUpdate.current) return;
-    sentGmailUpdate.current = true;
-    devlog("voice", "context update → voice agent: Gmail connected");
-    conversation.sendContextualUpdate(
-      `Gmail is now connected (${state.gmail.email ?? "unknown address"}).` +
-        (state.gmail.insights?.length ? ` Ideas from their inbox: ${state.gmail.insights.join("; ")}` : ""),
-    );
-  }, [conversation, state.gmail]);
+  useConversationClientTool("setAgentName", tool("setAgentName"));
+  useConversationClientTool("setUserName", tool("setUserName"));
+  useConversationClientTool("setUserEmail", tool("setUserEmail"));
+  useConversationClientTool("setHelpNeed", tool("setHelpNeed"));
+  useConversationClientTool("showGmailButton", tool("showGmailButton"));
+  useConversationClientTool("declineGmail", tool("declineGmail"));
+  useConversationClientTool("graduate", tool("graduate"));
+  useConversationClientTool("summarizeInbox", tool("summarizeInbox"));
+  useConversationClientTool("findEmails", tool("findEmails"));
+  useConversationClientTool("readEmail", tool("readEmail"));
+  useConversationClientTool("showDraft", tool("showDraft"));
 
   // Prefetch the token while ringing so "Answer" starts audio inside the click
   // gesture — Safari won't unlock audio after an extra network round trip.
@@ -149,14 +127,14 @@ export function VoiceCall({ state, dispatch, autoStart, onTranscript, onEnded, o
     setError(null);
     const snapshot = stateRef.current;
     endedRef.current = false;
-    sentGmailUpdate.current = snapshot.gmail.status === "connected";
     dispatch({ type: "callConnecting" });
     try {
       const token = (await tokenRef.current) || (await fetchToken());
       tokenRef.current = null; // single-use
+      const knownInfo = voiceContext(snapshot, hasToken);
       devlog("voice", `Dialing (attempt ${snapshot.call.attempts + 1})`, {
         firstMessage: voiceFirstMessage(snapshot),
-        known_info: describeState(snapshot),
+        known_info: knownInfo,
       });
       conversation.startSession({
         conversationToken: token,
@@ -165,7 +143,7 @@ export function VoiceCall({ state, dispatch, autoStart, onTranscript, onEnded, o
         // we fill its variables and pick a greeting that fits what's already known.
         dynamicVariables: {
           agent_name: snapshot.agentName ?? UNNAMED_AGENT,
-          known_info: describeState(snapshot),
+          known_info: knownInfo,
         },
         overrides: { agent: { firstMessage: voiceFirstMessage(snapshot) } },
       });
@@ -210,27 +188,27 @@ export function VoiceCall({ state, dispatch, autoStart, onTranscript, onEnded, o
   }
 
   return (
-    <div className="h-full w-full py-6 flex flex-col items-center gap-6 text-center">
+    <div className="h-full w-full py-4 lg:py-6 flex flex-col items-center gap-4 lg:gap-6 text-center overflow-y-auto">
       <div className="flex-1 w-full flex flex-col items-center justify-center gap-5">
         <div
-          className={`size-28 rounded-full flex items-center justify-center text-4xl font-semibold transition-all duration-300 ${
+          className={`size-28 rounded-full flex items-center justify-center display text-4xl transition-all duration-300 ${
             conversation.isSpeaking
-              ? "bg-emerald-500/30 ring-8 ring-emerald-500/15 scale-105"
+              ? "bg-imgreen/20 ring-8 ring-imgreen/10 scale-105"
               : live
-                ? "bg-emerald-500/15"
-                : "bg-black/5 dark:bg-white/10 animate-pulse"
+                ? "bg-surface border border-hairline"
+                : "bg-surface border border-hairline animate-pulse"
           }`}
         >
           {state.agentName ? state.agentName.charAt(0).toUpperCase() : "✦"}
         </div>
         <div>
-          <p className="text-2xl font-semibold">{agentName}</p>
-          <p className="text-sm opacity-60 tabular-nums">{status}</p>
+          <p className="display text-[28px]">{agentName}</p>
+          <p className="text-sm text-muted tabular-nums">{status}</p>
         </div>
 
         <div className="min-h-24 w-full flex flex-col justify-end gap-1.5 text-sm" aria-live="polite">
           {lines.map((l, i) => (
-            <p key={i} className={l.role === "user" ? "opacity-50" : ""}>
+            <p key={i} className={l.role === "user" ? "text-muted" : ""}>
               {l.role === "user" ? "You: " : ""}
               {l.text}
             </p>
@@ -249,10 +227,10 @@ export function VoiceCall({ state, dispatch, autoStart, onTranscript, onEnded, o
         </button>
       ) : (
         <div className="flex gap-3">
-          <button onClick={onDecline} className="rounded-full border border-black/15 dark:border-white/20 px-5 py-3">
+          <button onClick={onDecline} className="pill px-5 py-3">
             Keep texting
           </button>
-          <button onClick={answer} className="rounded-full bg-emerald-600 text-white px-8 py-3 font-medium">
+          <button onClick={answer} className="rounded-full bg-imgreen text-white px-8 py-3 font-medium">
             Answer
           </button>
         </div>

@@ -1,34 +1,81 @@
 @import "tailwindcss";
 
+/* Apple-like look (matches the Persona site). Theme is class-based: <html class="dark">
+   is the default, set before paint; the toggle saves a light/dark choice. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #1d1d1f;
+  --muted: #6e6e73;
+  --hairline: rgba(0, 0, 0, 0.12);
+  --surface: #f5f5f7;
+  --bubble: #e9e9eb;
+  --imblue: #007aff;
+  --imgreen: #34c759;
+  --pill-bg: #ffffff;
+  --pill-border: rgba(0, 0, 0, 0.24);
+  color-scheme: light;
+}
+
+.dark {
+  --background: #000000;
+  --foreground: #f5f5f7;
+  --muted: #98989d;
+  --hairline: rgba(255, 255, 255, 0.14);
+  --surface: #1c1c1e;
+  --bubble: #2c2c2e;
+  --imblue: #0a84ff;
+  --imgreen: #30d158;
+  --pill-bg: #1c1c1e;
+  --pill-border: rgba(255, 255, 255, 0.22);
+  color-scheme: dark;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-muted: var(--muted);
+  --color-hairline: var(--hairline);
+  --color-surface: var(--surface);
+  --color-bubble: var(--bubble);
+  --color-imblue: var(--imblue);
+  --color-imgreen: var(--imgreen);
+  --font-sans: -apple-system, "SF Pro Text", var(--font-inter), system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", var(--font-geist-mono), monospace;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Headings: SF Pro Display feel — medium weight, tight tracking. */
+.display {
+  font-family: -apple-system, "SF Pro Display", var(--font-inter), system-ui, sans-serif;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+}
+
+/* The site's pill: white, hairline border. */
+.pill {
+  border-radius: 9999px;
+  border: 0.5px solid var(--pill-border);
+  background: var(--pill-bg);
+  transition: background-color 0.15s;
+}
+.pill:hover:not(:disabled) {
+  background: var(--surface);
+  filter: brightness(0.97);
 }
 
 /* Briefly highlight a field when an agent fills it in. */
 @keyframes flash {
   from {
-    background-color: rgb(16 185 129 / 0.25);
+    background-color: rgb(52 199 89 / 0.2);
   }
 }
 .flash {
