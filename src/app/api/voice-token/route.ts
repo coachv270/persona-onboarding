@@ -1,6 +1,10 @@
 // Mints a short-lived WebRTC conversation token for the private ElevenLabs
 // agent, so the API key never reaches the browser.
-export async function GET() {
+export async function GET(req: Request) {
+  // Only our own page may mint call tokens (browsers set Sec-Fetch-Site).
+  if (req.headers.get("sec-fetch-site") !== "same-origin") {
+    return Response.json({ error: "Forbidden" }, { status: 403 });
+  }
   const apiKey = process.env.ELEVENLABS_API_KEY;
   const agentId = process.env.ELEVENLABS_AGENT_ID;
   if (!apiKey || !agentId) {

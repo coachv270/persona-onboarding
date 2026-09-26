@@ -10,6 +10,7 @@ import { google } from "@ai-sdk/google";
 import { systemPrompt } from "@/lib/prompts";
 import { chatTools, GEMINI_MODEL, type ChatMessage } from "@/lib/tools";
 import type { OnboardingState } from "@/lib/onboarding";
+import { forbidden, sameOrigin } from "@/lib/server/guard";
 
 export const maxDuration = 30;
 
@@ -22,6 +23,7 @@ interface ChatRequest {
 }
 
 export async function POST(req: Request) {
+  if (!sameOrigin(req)) return forbidden();
   const { messages, onboardingState, hasGmailToken, now, timeZone }: ChatRequest = await req.json();
 
   const modelMessages = await convertToModelMessages(messages, { tools: chatTools, ignoreIncompleteToolCalls: true });

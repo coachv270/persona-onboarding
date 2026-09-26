@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { clearDevlog, devlogStore, type DevKind } from "@/lib/devlog";
+import { disconnectGmail, expireAccessToken, gmailStore, refreshGmailStatus } from "@/lib/gmail";
 
 const KIND_STYLE: Record<DevKind, string> = {
   chat: "bg-blue-500/15 text-blue-700 dark:text-blue-300",
@@ -21,8 +22,10 @@ export function DevPanel() {
   const [open, setOpen] = useState(false);
   const [confirmWipe, setConfirmWipe] = useState(false);
 
-  // Everything (onboarding state, chat history, this log) lives in localStorage.
-  const wipe = () => {
+  // Onboarding state, chat history and this log live in localStorage; the Gmail
+  // session is an httpOnly cookie on the server, disconnected (and revoked) too.
+  const wipe = async () => {
+    await disconnectGmail().catch(() => {});
     try {
       localStorage.clear();
     } catch {}
@@ -61,7 +64,7 @@ export function DevPanel() {
           <div className="px-4 py-2 border-b border-black/10 dark:border-white/15 text-xs flex items-center gap-3">
             {confirmWipe ? (
               <>
-                <span className="text-red-600">Erase all local data (state, chat, log) and reload?</span>
+                <span className="text-red-600">Erase all local data (state, chat, log), disconnect Gmail and reload?</span>
                 <button onClick={wipe} className="rounded-full bg-red-600 text-white px-3 py-0.5">
                   Yes, clear
                 </button>
@@ -75,6 +78,7 @@ export function DevPanel() {
               </button>
             )}
           </div>
+          <GoogleAccess />
           <ol className="flex-1 overflow-y-auto font-mono text-[11px] leading-snug divide-y divide-black/5 dark:divide-white/10">
             {[...entries].reverse().map((e) => (
               <li key={e.id} className="px-4 py-1.5 flex gap-2 items-start">
@@ -96,5 +100,46 @@ export function DevPanel() {
         </div>
       )}
     </>
+  );
+}
+
+// Server-side Gmail session: what's connected and when the access token
+// expires. The tokens themselves never reach the browser.
+function GoogleAccess() {
+  const status = useSyncExternalStore(gmailStore.subscribe, gmailStore.get, gmailStore.get);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    void refreshGmailStatus();
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const secs = Math.max(0, Math.floor(((status.accessExpiresAt ?? 0) - now) / 1000));
+  return (
+    <div className="px-4 py-2 border-b border-black/10 dark:border-white/15 text-xs flex flex-col gap-1">
+      <div className="flex items-center justify-between">
+        <span className="font-medium">Google access (server session)</span>
+        {status.connected && (
+          <div className="flex gap-3">
+            <button onClick={() => void expireAccessToken()} className="opacity-60 hover:opacity-100" title="Drop the access token; the next call refreshes it">
+              Force refresh
+            </button>
+            <button onClick={() => void disconnectGmail()} className="text-red-600 opacity-80 hover:opacity-100" title="Revoke at Google and clear the cookie">
+              Disconnect
+            </button>
+          </div>
+        )}
+      </div>
+      {status.connected ? (
+        <div className="font-mono flex flex-col gap-0.5">
+          <span>{status.email}</span>
+          <span className="opacity-60">{(status.scopes ?? []).filter((x) => x.includes("gmail")).map((x) => x.split("/").pop()).join(", ")}</span>
+          <span className={secs < 60 ? "text-red-600" : "opacity-60"}>
+            access token: {secs ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")} left` : "expired (refreshes on next call)"}
+          </span>
+        </div>
+      ) : (
+        <span className="opacity-50">Not connected. Tokens are kept server-side in an encrypted httpOnly cookie.</span>
+      )}
+    </div>
   );
 }

@@ -17,7 +17,7 @@ Persona trial assignment, now one universal assistant with progressive unlock:
 | App / hosting | Next.js on Vercel |
 | Text | Vercel AI SDK v7 + Gemini (`gemini-flash-latest`), client-side tools (`/api/chat`) |
 | Voice | ElevenLabs Agents, `@elevenlabs/react` v1, WebRTC, conversation token from `/api/voice-token`, client tools |
-| Gmail | Google Identity Services popup token flow (`gmail.readonly`; `gmail.compose` only for Save to Drafts). Search, read and draft in the browser via `mailCommands.ts` |
+| Gmail | Popup code flow; the server exchanges the code and keeps tokens in an encrypted httpOnly cookie. Search, read, draft via `/api/mail` (`src/lib/server/*`) |
 | State | One reducer shared by chat and voice (`src/lib/onboarding.ts`), persisted in `localStorage` |
 
 ## Done
@@ -45,6 +45,13 @@ Persona trial assignment, now one universal assistant with progressive unlock:
 - [x] Drafts: editable, Copy, Save to Gmail Drafts (compose scope on click). `gmail.compose` added in Google Cloud.
 - [x] Voice agent: 11 client tools published, unified prompt synced via `npm run sync:voice`.
 - [x] Persona-style UI (light, SF Pro/Inter, iMessage bubbles), help actions + numbered "How it works" on the right, compact mobile layout, voice lines tagged and calls marked with dividers.
+
+## Security hardening (branch `feature/persist-gmail-token`)
+
+- [x] All Gmail calls moved server-side; the browser never holds a Google token.
+- [x] Route guards (origin / Fetch Metadata), `server-only` modules, `npm run check:secrets`.
+- [x] Production **paused** on Vercel (503) until this ships.
+- [ ] Add `GOOGLE_CLIENT_SECRET` + `SESSION_SECRET` to `.env.local` and Vercel (Sensitive), test connect → summarize → Save to Drafts → Disconnect, merge, then resume the project.
 
 ## Remaining
 
