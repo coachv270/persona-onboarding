@@ -29,6 +29,7 @@ import { findEmails, prepareDraft, readEmail, summarizePeriod, type Detail, type
 import type { ChatMessage } from "@/lib/tools";
 import { devlog } from "@/lib/devlog";
 import { VoiceCall } from "./VoiceCall";
+import { ThemeToggle } from "./ThemeToggle";
 
 const MESSAGES_KEY = "persona-onboarding-messages-v1";
 const MAIL_TOOLS = new Set(["tool-summarizeInbox", "tool-findEmails", "tool-readEmail"]);
@@ -438,9 +439,12 @@ export function Onboarding({
 
   return (
     <div className="h-dvh flex flex-col">
-      <header className="shrink-0 px-4 lg:px-5 py-2.5 lg:py-3 flex items-center gap-2">
-        <span className="size-6 rounded-full border border-foreground/80 flex items-center justify-center text-[11px] font-semibold">P</span>
-        <span className="display text-[17px]">Persona</span>
+      <header className="shrink-0 px-4 lg:px-5 py-2.5 lg:py-3 flex items-center gap-3">
+        <ThemeToggle />
+        <span className="flex items-center gap-2">
+          <span className="size-6 rounded-full border border-foreground/80 flex items-center justify-center text-[11px] font-semibold">P</span>
+          <span className="display text-[17px]">Persona</span>
+        </span>
       </header>
 
       <div className="flex-1 min-h-0 mx-auto w-full max-w-7xl px-3 lg:px-4 pb-3 lg:pb-4 grid gap-3 lg:gap-6 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] lg:grid-rows-1 lg:grid-cols-[280px_minmax(0,1fr)_280px]">
