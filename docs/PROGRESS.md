@@ -53,7 +53,7 @@ It should try a web voice call to collect everything except the agent name. It m
 
 ## Notes / Gotchas
 
-- `VoiceCall.tsx` overrides `firstMessage` only on callbacks (after a dropped call); first calls use the dashboard first message. Callbacks fail until the First message override is enabled in the ElevenLabs dashboard.
+- `VoiceCall.tsx` overrides `firstMessage` only on callbacks (after a dropped call); first calls use the dashboard first message. This relies on the First message override, which is enabled.
 - Client tools only run in the web app. In the ElevenLabs console they fail or time out (see [VOICE_AGENT.md](VOICE_AGENT.md#testing-in-the-console)).
 
 ## Related Docs
