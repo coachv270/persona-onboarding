@@ -27,23 +27,20 @@ It should try a web voice call to collect everything except the agent name. It m
 
 - [x] Scaffold built. Typecheck, lint and build pass.
 - [x] Public repo: https://github.com/coachv270/persona-onboarding (`main`; pushes auto-deploy to Vercel).
-- [x] ElevenLabs agent "My Agent" (`agent_2301m3frxgp4f9vbd0ksry9tg3yh`): system prompt and first message from [VOICE_AGENT.md](VOICE_AGENT.md) entered as **pending changes (NOT published)**. Dynamic-variable test values set (`agent_name=Nova`, `known_info`).
+- [x] ElevenLabs agent "My Agent" (`agent_2301m3frxgp4f9vbd0ksry9tg3yh`): system prompt and first message from [VOICE_AGENT.md](VOICE_AGENT.md) entered and published. Dynamic-variable test values set (`agent_name=Nova`, `known_info`).
 - [x] Google Cloud project `persona-onboarding` (id `persona-onboarding-509821`, org powercrafttraining.com): Gmail API enabled. OAuth consent is External and in Testing, app name "Persona Onboarding", test user coachv@powercrafttraining.com.
 - [x] App fills the dashboard prompt via dynamic variables (`agent_name`, `known_info`) instead of overriding the prompt.
 - [x] Google: `gmail.readonly` scope added. Web OAuth client created with origins `https://persona-onboarding-phi.vercel.app` and `http://localhost:3000`.
 - [x] Vercel project `persona-onboarding` deployed: **https://persona-onboarding-phi.vercel.app** (first deploy had no env values).
 - [x] ElevenLabs API key created and put in `.env.local`.
+- [x] Vercel env vars set (Production + Preview) and redeployed. Verified live: chat and tool calls work; Google client ID is in the bundle.
+- [x] ElevenLabs agent configured and **published**: 4 client tools, End conversation, authentication, First-message override (see [VOICE_AGENT.md](VOICE_AGENT.md#agent-configuration-live)).
 
 ## Remaining
 
-- [ ] Vercel: set the 4 env values (Settings → Environment Variables), then **redeploy**. `NEXT_PUBLIC_GOOGLE_CLIENT_ID` is inlined at build time.
-- [ ] ElevenLabs dashboard:
-  - Add 4 client tools with **Wait for response**: `setUserName{name}`, `setHelpNeed{need}`, `showGmailButton`, `graduate`
-  - Enable the **End call** system tool
-  - Enable the **First message** override and **authentication**
-  - **Publish**
-- [ ] Add reviewer emails as Google test users.
-- [ ] End-to-end test and stress scenarios: hang up mid-call, refuse Gmail, out-of-order answers, "just let me in", silence, mic denied.
+- [ ] ElevenLabs API key: grant **ElevenAgents write** (`convai_write`) permission. `/api/voice-token` currently returns 401 `missing_permissions`. Editing the existing key keeps its value, so there's no need to touch Vercel or `.env.local`.
+- [ ] Add reviewer emails as Google OAuth test users.
+- [ ] End-to-end test of voice + Gmail, then the stress scenarios: hang up mid-call, refuse Gmail, out-of-order answers, "just let me in", silence, mic denied.
 
 ## `.env.local` status
 

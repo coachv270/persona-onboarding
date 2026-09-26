@@ -2,6 +2,38 @@
 
 The system prompt and first message for the Persona onboarding call. Paste them into the agent in the ElevenLabs console.
 
+## Agent configuration (live)
+
+Agent **"My Agent"**, `agent_2301m3frxgp4f9vbd0ksry9tg3yh`, published 2026-09-26. Any dashboard edit is a pending draft until you click **Publish**; the web app only uses the published version, while **Preview** in the console uses the draft.
+
+| Area | Setting |
+|---|---|
+| Agent | Voice: Luna (Calm & Grounded). LLM: Gemini 3.8 Flash. Language: English. System prompt and first message: below. |
+| Client tools | `setUserName(name)`, `setHelpNeed(need)`, `showGmailButton()`, `graduate()`. All: string params required, **Wait for response** on, response timeout 5 s. |
+| System tools | **End conversation** on. The SDK reports it as `onDisconnect({ reason: "agent", context.type: "end_call" })`. |
+| Security → Authentication | On. Calls need a conversation token from `/api/voice-token`, which uses `ELEVENLABS_API_KEY` on the server. |
+| Security → Overrides | **First message** only, used for callback greetings. The system prompt is not overridable, so the dashboard is the source of truth. |
+| Security → Allowlist | Empty. Authentication already gates access; optionally add `persona-onboarding-phi.vercel.app` and `localhost:3000`. |
+| Advanced | Defaults: Turn V3, "End conversation after silence" disabled. The prompt handles silence ("Still there?") and hangs up itself. |
+
+Tool names and params must match `useConversationClientTool(...)` in `src/components/VoiceCall.tsx`. Each tool was created with **Add tool → Client → Edit as JSON**:
+
+```json
+{
+  "type": "client",
+  "name": "setUserName",
+  "description": "Save the user's name the moment they say it (just the name they want to be called).",
+  "expects_response": true,
+  "response_timeout_secs": 5,
+  "parameters": [
+    { "id": "name", "type": "string", "description": "The name the user wants to be called, e.g. \"Alex\".",
+      "dynamic_variable": "", "required": true, "constant_value": "", "value_type": "llm_prompt" }
+  ]
+}
+```
+
+(The editor pre-fills the remaining fields, such as `interruption_mode` and `execution_mode`, with defaults.)
+
 ## Dynamic variables
 
 | Variable | Example test value | Meaning |
