@@ -1,16 +1,37 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls } from "ai";
 import { useConversationControls, useConversationStatus } from "@elevenlabs/react";
-import { describeState, missingSlots, reducer, saveState, type Action, type OnboardingState } from "@/lib/onboarding";
-import { fetchRecentMail, loadGis, requestGmailToken } from "@/lib/gmail";
+import {
+  describeState,
+  mailAccess,
+  missingSlots,
+  normalizeEmail,
+  reducer,
+  saveState,
+  type Action,
+  type OnboardingState,
+} from "@/lib/onboarding";
+import {
+  COMPOSE,
+  createDraft,
+  fetchRecentMail,
+  getCachedToken,
+  getProfileEmail,
+  loadGis,
+  requestGmailToken,
+  tokenStore,
+  type Draft,
+} from "@/lib/gmail";
+import { findEmails, prepareDraft, readEmail, summarizePeriod, type Detail, type MailResult } from "@/lib/mailCommands";
 import type { ChatMessage } from "@/lib/tools";
 import { devlog } from "@/lib/devlog";
 import { VoiceCall } from "./VoiceCall";
 
 const MESSAGES_KEY = "persona-onboarding-messages-v1";
+const MAIL_TOOLS = new Set(["tool-summarizeInbox", "tool-findEmails", "tool-readEmail"]);
 
 export function loadMessages(): ChatMessage[] {
   try {
@@ -21,16 +42,31 @@ export function loadMessages(): ChatMessage[] {
   }
 }
 
+// Email contents stay out of localStorage: large mail tool outputs are replaced.
 function saveMessages(messages: ChatMessage[]) {
+  const slim = messages.map((m) => ({
+    ...m,
+    parts: m.parts.map((p) =>
+      MAIL_TOOLS.has(p.type) && "output" in p && typeof p.output === "string" && p.output.length > 300
+        ? { ...p, output: "[email content omitted]" }
+        : p,
+    ),
+  }));
   try {
-    localStorage.setItem(MESSAGES_KEY, JSON.stringify(messages));
+    localStorage.setItem(MESSAGES_KEY, JSON.stringify(slim));
   } catch {}
 }
 
-type TextField = "agentName" | "userName" | "helpNeed";
+type TextField = "agentName" | "userName" | "userEmail" | "helpNeed";
 
-const FIELD_ACTION = { agentName: "setAgentName", userName: "setUserName", helpNeed: "setHelpNeed" } as const;
-const FIELD_LABEL = { agentName: "a name for you", userName: "their name", helpNeed: "what they need help with" };
+const FIELD_LABEL: Record<TextField, string> = {
+  agentName: "a name for you",
+  userName: "their name",
+  userEmail: "their email",
+  helpNeed: "what they need help with",
+};
+
+type DraftItem = Draft & { status: "idle" | "saving" | "saved" | "error"; error?: string };
 
 export function Onboarding({
   initialState,
@@ -57,9 +93,16 @@ export function Onboarding({
   const [call, setCall] = useState<null | "dial" | "ring">(null);
   const [gmailBusy, setGmailBusy] = useState(false);
   const [gmailError, setGmailError] = useState<string | null>(null);
+  const [needReconnect, setNeedReconnect] = useState(false);
+  const [drafts, setDrafts] = useState<DraftItem[]>([]);
   const [input, setInput] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
   const voice = useConversationControls();
   const { status: voiceStatus } = useConversationStatus();
+  // Re-render when a Gmail token is granted or dropped (tokens live in memory only).
+  useSyncExternalStore(tokenStore.subscribe, tokenStore.getSnapshot, tokenStore.getSnapshot);
+  const hasToken = !!getCachedToken();
+  const access = mailAccess(state, hasToken);
 
   useEffect(() => {
     saveState(state);
@@ -68,17 +111,92 @@ export function Onboarding({
     loadGis().catch(() => {});
   }, []);
 
-  // Same trick as VoiceCall: return the post-update state to the model at once.
+  // Apply locally too, so a tool result reports the updated picture immediately.
   const apply = (action: Action) => {
     dispatch(action);
     stateRef.current = reducer(stateRef.current, action);
     return describeState(stateRef.current);
   };
 
+  // ---- One implementation per capability; chat and voice both call runTool ----
+
+  const handleMail = (r: MailResult) => {
+    if (r.needs === "connect" && stateRef.current.gmail.status !== "connected") apply({ type: "gmail", value: { status: "offered" } });
+    if (r.needs === "reconnect") setNeedReconnect(true);
+    const draft = r.draft;
+    if (draft) setDrafts((d) => [...d, { ...draft, status: "idle" }]);
+    return r.text;
+  };
+
+  const runTool = async (name: string, input: Record<string, unknown>, detail: Detail): Promise<string> => {
+    const str = (k: string) => String(input[k] ?? "").trim();
+    const ctx = { gmailConnected: stateRef.current.gmail.status === "connected", detail };
+    const setText = (type: "setAgentName" | "setUserName" | "setHelpNeed", key: string) =>
+      str(key) ? apply({ type, value: str(key) }) : "Empty value — ask again.";
+
+    switch (name) {
+      case "setAgentName":
+        return setText("setAgentName", "name");
+      case "setUserName":
+        return setText("setUserName", "name");
+      case "setHelpNeed":
+        return setText("setHelpNeed", "need");
+      case "setUserEmail": {
+        const email = normalizeEmail(str("email"));
+        if (!email) {
+          devlog("state", `setUserEmail rejected: invalid format`);
+          return `Not a valid email: '${str("email")}'. Ask them to spell it.`;
+        }
+        const s = stateRef.current;
+        if (s.userEmailSource === "google" && email !== s.userEmail) {
+          return `Their connected Gmail (${s.userEmail}) is used and wins over '${email}'. Mention it once.`;
+        }
+        return apply({ type: "setUserEmail", value: email, source: "user" });
+      }
+      case "requestGmailConnect":
+      case "showGmailButton":
+        if (stateRef.current.gmail.status === "connected") {
+          if (getCachedToken()) return "Gmail is already connected.";
+          setNeedReconnect(true);
+          return "A Reconnect Gmail button is now showing (access expired this session).";
+        }
+        apply({ type: "gmail", value: { status: "offered" } });
+        return "A 'Connect Gmail' button is now showing on screen; the user clicks it in the browser.";
+      case "declineGmail":
+        return apply({ type: "gmail", value: { status: "declined" } });
+      case "startCall":
+        setCall("ring");
+        return "The incoming-call screen is showing; the user can answer or keep texting.";
+      case "graduate":
+        apply({ type: "graduate" });
+        return "Noted — no more setup questions. Keep helping.";
+      case "summarizeInbox":
+        return handleMail(await summarizePeriod({ after: str("after"), before: str("before") || undefined }, ctx));
+      case "findEmails":
+        return handleMail(await findEmails({ query: str("query") }, ctx));
+      case "readEmail":
+        return handleMail(await readEmail({ id: str("id") }, ctx));
+      case "showDraft":
+        return handleMail(await prepareDraft({ messageId: str("messageId"), body: String(input.body ?? "") }, ctx));
+      default:
+        devlog("error", `Unknown tool: ${name}`);
+        return `Unknown tool ${name}.`;
+    }
+  };
+
   // Function body → evaluated per request, so tool-result resends also carry fresh state.
   const transport = useMemo(
-    // eslint-disable-next-line react-hooks/refs -- the ref is read lazily per request, not during render
-    () => new DefaultChatTransport<ChatMessage>({ api: "/api/chat", body: () => ({ onboardingState: stateRef.current }) }),
+    () =>
+      // eslint-disable-next-line react-hooks/refs -- the ref is read lazily per request, not during render
+      new DefaultChatTransport<ChatMessage>({
+        api: "/api/chat",
+        body: () => ({
+          onboardingState: stateRef.current,
+          hasGmailToken: !!getCachedToken(),
+          now: new Date().toString(),
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        }),
+      }),
     [],
   );
 
@@ -95,30 +213,17 @@ export function Onboarding({
     onToolCall({ toolCall }): void {
       if (toolCall.dynamic) return;
       devlog("tool", `chat → ${toolCall.toolName}`, toolCall.input);
-      const done = (output: string): void => {
-        // Not awaited — awaiting inside onToolCall can deadlock the chat.
-        void addToolOutput({ tool: toolCall.toolName, toolCallId: toolCall.toolCallId, output });
-      };
-
-      switch (toolCall.toolName) {
-        case "setAgentName":
-          return done(apply({ type: "setAgentName", value: toolCall.input.name }));
-        case "setUserName":
-          return done(apply({ type: "setUserName", value: toolCall.input.name }));
-        case "setHelpNeed":
-          return done(apply({ type: "setHelpNeed", value: toolCall.input.need }));
-        case "requestGmailConnect":
-          apply({ type: "gmail", value: { status: "offered" } });
-          return done("The Connect Gmail button is now showing.");
-        case "declineGmail":
-          return done(apply({ type: "gmail", value: { status: "declined" } }));
-        case "startCall":
-          setCall("ring");
-          return done("The incoming-call screen is showing; the user can answer or keep texting.");
-        case "graduate":
-          apply({ type: "graduate" });
-          return done("Onboarding complete.");
-      }
+      // Not awaited — awaiting inside onToolCall can deadlock the chat.
+      void runTool(toolCall.toolName, toolCall.input as Record<string, unknown>, "text")
+        .then((output) => addToolOutput({ tool: toolCall.toolName, toolCallId: toolCall.toolCallId, output }))
+        .catch((e) =>
+          addToolOutput({
+            tool: toolCall.toolName,
+            toolCallId: toolCall.toolCallId,
+            state: "output-error",
+            errorText: e instanceof Error ? e.message : String(e),
+          }),
+        );
     },
   });
 
@@ -134,7 +239,6 @@ export function Onboarding({
 
   // Hidden note that nudges the text agent after something happens outside the chat.
   const sendEvent = (text: string) => {
-    if (stateRef.current.graduated) return;
     devlog("chat", `event → chat agent: ${text}`);
     sendMessage({ text: `[Event] ${text}`, metadata: { hidden: true } });
   };
@@ -144,8 +248,17 @@ export function Onboarding({
     if (voiceStatus === "connected") {
       devlog("voice", `context update → voice agent: ${text}`);
       voice.sendContextualUpdate(text);
+    } else if (chat && !callLive()) sendEvent(text);
+  };
+
+  const askAssistant = (text: string) => {
+    if (voiceStatus === "connected") {
+      devlog("voice", `user (clicked): ${text}`);
+      voice.sendUserMessage(text);
+    } else if (!busy) {
+      devlog("chat", `user (clicked): ${text}`);
+      sendMessage({ text });
     }
-    else if (chat && !callLive()) sendEvent(text);
   };
 
   const appendVoiceTranscript = (role: "user" | "agent", text: string) =>
@@ -161,35 +274,55 @@ export function Onboarding({
 
   const onCallEnded = (reason: string) => {
     setCall(null);
-    const s = stateRef.current;
-    if (s.graduated) return;
-    sendEvent(
-      `The voice call ended: ${reason}. Continue here in text with whatever is still missing` +
-        (missingSlots(s).length ? "." : ", or wrap up and graduate."),
-    );
+    sendEvent(`The voice call ended: ${reason}. Continue here in text.`);
   };
 
-  // Typed straight into a field: no chat event needed (the next chat turn sees the
-  // state), but a live voice agent should hear about it.
-  const editField = (field: TextField, value: string) => {
-    const v = value.trim();
-    if (!v || v === stateRef.current[field]) return;
-    apply({ type: FIELD_ACTION[field], value: v });
+  // Typed straight into a field. Returns an error message, or null when saved.
+  const editField = (field: TextField, raw: string): string | null => {
+    let v = raw.trim();
+    if (!v || v === stateRef.current[field]) return null;
+    if (field === "userEmail") {
+      const email = normalizeEmail(v);
+      if (!email) return "That doesn't look like an email address.";
+      if (stateRef.current.userEmailSource === "google") return "Your connected Gmail address is used.";
+      v = email;
+      apply({ type: "setUserEmail", value: v, source: "user" });
+    } else {
+      apply({ type: ({ agentName: "setAgentName", userName: "setUserName", helpNeed: "setHelpNeed" } as const)[field], value: v });
+    }
     notifyAgents(`The user just typed ${FIELD_LABEL[field]} on screen: "${v}". Treat it as confirmed; don't ask again.`, {
       chat: false,
     });
+    return null;
   };
 
   const connectGmail = async () => {
+    const before = stateRef.current;
+    // Popup first, synchronously inside the click — anything awaited before it gets blocked.
+    const tokenP = requestGmailToken({ hint: before.userEmail });
     setGmailError(null);
     setGmailBusy(true);
     devlog("gmail", "Google popup opened");
     try {
-      const token = await requestGmailToken();
-      const mail = await fetchRecentMail(token);
-      devlog("gmail", `Authorized ${mail.email}; read ${mail.messages.length} message headers`);
+      const token = await tokenP;
+      setNeedReconnect(false);
+      const email = (await getProfileEmail(token)).toLowerCase();
+      devlog("gmail", `Authorized ${email}`);
+      const mismatch =
+        before.userEmail && before.userEmail !== email
+          ? ` They'd given ${before.userEmail}; their Gmail is ${email} — say (once) you'll use that.`
+          : "";
+      apply({ type: "setUserEmail", value: email, source: "google" });
+
+      if (before.gmail.status === "connected") {
+        apply({ type: "gmail", value: { email } });
+        notifyAgents(`Gmail reconnected (${email}). If they were waiting on an email request, retry it now.${mismatch}`, { chat: true });
+        return;
+      }
+
       let insights: string[] = [];
       try {
+        const mail = await fetchRecentMail(token);
         const res = await fetch("/api/insights", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -202,13 +335,13 @@ export function Onboarding({
         devlog("error", `Insights: ${e instanceof Error ? e.message : String(e)}`);
       }
       devlog("gmail", `Inbox ideas: ${insights.length}`, insights);
-      dispatch({ type: "gmail", value: { status: "connected", email: mail.email, insights } });
-      // During a call, VoiceCall pushes a contextual update to the voice agent instead.
-      if (!callLive()) {
-        sendEvent(
-          `Gmail connected (${mail.email}).` + (insights.length ? ` Ideas from their inbox: ${insights.join("; ")}` : ""),
-        );
-      }
+      apply({ type: "gmail", value: { status: "connected", email, insights } });
+      notifyAgents(
+        `Gmail connected (${email}) — email help is now unlocked.` +
+          (insights.length ? ` Ideas from their inbox: ${insights.join("; ")}` : "") +
+          mismatch,
+        { chat: true },
+      );
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       devlog("error", `Gmail: ${message}`);
@@ -224,9 +357,23 @@ export function Onboarding({
     notifyAgents("The user clicked 'Not now' on the Gmail button.", { chat: true });
   };
 
-  const finish = () => {
-    if (callLive()) voice.endSession();
-    dispatch({ type: "graduate" });
+  const updateDraft = (id: string, patch: Partial<DraftItem>) =>
+    setDrafts((ds) => ds.map((d) => (d.id === id ? { ...d, ...patch } : d)));
+
+  const saveDraft = async (d: DraftItem) => {
+    // Compose scope is only requested here, on click — popup first.
+    const tokenP = requestGmailToken({ scope: COMPOSE, hint: stateRef.current.userEmail });
+    updateDraft(d.id, { status: "saving", error: undefined });
+    try {
+      await createDraft(await tokenP, d);
+      updateDraft(d.id, { status: "saved" });
+      devlog("gmail", `Draft saved to Gmail Drafts (reply to ${d.to.replace(/.*</, "<")})`);
+      notifyAgents("The user saved the reply to their Gmail Drafts. It was NOT sent.", { chat: false });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      devlog("error", `Save draft: ${message}`);
+      updateDraft(d.id, { status: "error", error: message });
+    }
   };
 
   const submit = (e: React.FormEvent) => {
@@ -238,37 +385,45 @@ export function Onboarding({
     setInput("");
   };
 
+  const prefill = (text: string) => {
+    setInput(text);
+    inputRef.current?.focus();
+  };
+
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, state.gmail.status]);
-
-  if (state.graduated && !inCall) {
-    // The graduate tool fires before the reply streams in, so keep showing that reply here.
-    const last = messages.at(-1);
-    const farewell = last?.role === "assistant" && !last.metadata?.hidden ? messageText(last) : "";
-    return <Graduated state={state} farewell={farewell} onReset={onReset} />;
-  }
+  }, [messages, state.gmail.status, drafts.length, needReconnect]);
 
   const agent = state.agentName ?? "your assistant";
   const visibleMessages = messages.filter((m) => !m.metadata?.hidden && messageText(m));
+  const showReconnect = needReconnect && access === "expired";
   const gmailCard =
-    state.gmail.status === "offered" ? (
-      <GmailCard busy={gmailBusy} error={gmailError} onConnect={connectGmail} onDecline={declineGmail} />
+    state.gmail.status === "offered" || showReconnect ? (
+      <GmailCard
+        reconnect={showReconnect}
+        busy={gmailBusy}
+        error={gmailError}
+        onConnect={connectGmail}
+        onDecline={declineGmail}
+      />
     ) : null;
+  const draftCards = drafts.map((d) => (
+    <DraftCard key={d.id} draft={d} onChange={(body) => updateDraft(d.id, { body, status: "idle" })} onSave={() => saveDraft(d)} />
+  ));
 
   return (
     <div className="mx-auto w-full max-w-5xl min-h-dvh md:h-dvh px-4 py-4 md:py-6 grid gap-4 md:gap-6 md:grid-cols-[300px_1fr]">
       <aside className="flex flex-col gap-4 md:overflow-y-auto">
         <ProfileCard
           state={state}
-          inCall={inCall}
+          hasToken={hasToken}
           gmailBusy={gmailBusy}
           gmailError={gmailError}
           onEdit={editField}
           onConnectGmail={connectGmail}
-          onFinish={finish}
         />
+        <HelpActions access={access} inCall={inCall} onAsk={askAssistant} onPrefill={prefill} />
         <HowItWorks />
         <button onClick={onReset} className="self-start text-xs opacity-50 hover:opacity-100">
           Start over
@@ -280,7 +435,9 @@ export function Onboarding({
           <VoiceCall
             state={state}
             dispatch={dispatch}
+            hasToken={hasToken}
             autoStart={call !== "ring"}
+            runTool={runTool}
             onTranscript={appendVoiceTranscript}
             onEnded={onCallEnded}
             onDecline={() => {
@@ -289,18 +446,19 @@ export function Onboarding({
             }}
           >
             {gmailCard}
+            {draftCards.at(-1)}
           </VoiceCall>
         ) : (
           <>
             <main className="flex-1 overflow-y-auto flex flex-col gap-3 py-4">
-              {visibleMessages.length === 0 ? (
+              {visibleMessages.length === 0 && drafts.length === 0 ? (
                 <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center px-4">
                   <Avatar name={state.agentName} />
                   <h1 className="text-2xl font-semibold">
                     {state.agentName ? `Say hi to ${state.agentName}` : "Meet your new assistant"}
                   </h1>
                   <p className="opacity-60 max-w-sm">
-                    Hop on a quick call, type below, or fill in the details on the left — whatever&apos;s easiest.
+                    Ask for help, hop on a quick call, or fill in the details on the left — whatever&apos;s easiest.
                   </p>
                   <button
                     onClick={() => setCall("dial")}
@@ -314,12 +472,14 @@ export function Onboarding({
               )}
               {status === "submitted" && <p className="text-sm opacity-50">…</p>}
               {error && <p className="text-sm text-red-600">Something went wrong: {error.message}</p>}
+              {draftCards}
               {gmailCard}
               <div ref={bottomRef} />
             </main>
 
             <form onSubmit={submit} className="py-4 flex gap-2">
               <input
+                ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder={`Message ${agent}…`}
@@ -348,26 +508,35 @@ export function Onboarding({
 
 function ProfileCard({
   state,
-  inCall,
+  hasToken,
   gmailBusy,
   gmailError,
   onEdit,
   onConnectGmail,
-  onFinish,
 }: {
   state: OnboardingState;
-  inCall: boolean;
+  hasToken: boolean;
   gmailBusy: boolean;
   gmailError: string | null;
-  onEdit: (field: TextField, value: string) => void;
+  onEdit: (field: TextField, value: string) => string | null;
   onConnectGmail: () => void;
-  onFinish: () => void;
 }) {
-  const complete = missingSlots(state).length === 0;
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const missing = missingSlots(state).length;
+  const connected = state.gmail.status === "connected";
   return (
     <div className="rounded-3xl border border-black/10 dark:border-white/15 p-4 flex flex-col gap-3">
       <Field label="Assistant's name" value={state.agentName} placeholder="e.g. Nova" onCommit={(v) => onEdit("agentName", v)} />
       <Field label="Your name" value={state.userName} placeholder="What should they call you?" onCommit={(v) => onEdit("userName", v)} />
+      <Field
+        label={state.userEmailSource === "google" ? "Email · from Google" : "Email"}
+        value={state.userEmail}
+        placeholder="you@example.com"
+        type="email"
+        disabled={state.userEmailSource === "google"}
+        error={emailError}
+        onCommit={(v) => setEmailError(onEdit("userEmail", v))}
+      />
       <Field
         label="What you need help with"
         value={state.helpNeed}
@@ -377,33 +546,34 @@ function ProfileCard({
       />
       <div className="flex flex-col gap-1">
         <span className="text-xs font-medium opacity-60">Gmail</span>
-        {state.gmail.status === "connected" ? (
+        {connected && hasToken ? (
           <p key={state.gmail.email} className="flash text-sm rounded-xl px-3 py-2 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 truncate">
-            ✓ {state.gmail.email ?? "Connected"}
+            ✓ Connected
           </p>
         ) : (
           <button
             onClick={onConnectGmail}
             disabled={gmailBusy}
             className={`text-sm rounded-xl px-3 py-2 text-left border transition-colors disabled:opacity-50 ${
-              state.gmail.status === "offered"
+              state.gmail.status === "offered" || connected
                 ? "border-blue-500 bg-blue-500/10 text-blue-700 dark:text-blue-300"
                 : "border-black/10 dark:border-white/15 hover:border-blue-500"
             }`}
           >
-            {gmailBusy ? "Connecting…" : state.gmail.status === "declined" ? "Skipped · connect anyway" : "Connect Gmail (read-only)"}
+            {gmailBusy
+              ? "Connecting…"
+              : connected
+                ? "Reconnect Gmail (session expired)"
+                : state.gmail.status === "declined"
+                  ? "Skipped · connect anyway"
+                  : "Connect Gmail"}
           </button>
         )}
         {gmailError && <p className="text-xs text-red-600">{gmailError}</p>}
       </div>
-      <button
-        onClick={onFinish}
-        className={`mt-1 rounded-full px-4 py-2 text-sm font-medium ${
-          complete ? "bg-foreground text-background" : "border border-black/15 dark:border-white/20 opacity-70 hover:opacity-100"
-        }`}
-      >
-        {complete ? "Finish setup →" : inCall ? "Skip ahead (ends call) →" : "Skip ahead →"}
-      </button>
+      <p className={`text-xs ${missing === 0 ? "text-emerald-700 dark:text-emerald-400" : "opacity-50"}`}>
+        {missing === 0 ? "✓ Setup complete" : `${missing} detail${missing === 1 ? "" : "s"} left — or just ask for help`}
+      </p>
     </div>
   );
 }
@@ -415,15 +585,23 @@ function Field({
   value,
   placeholder,
   multiline,
+  type = "text",
+  disabled,
+  error,
   onCommit,
 }: {
   label: string;
   value: string | null;
   placeholder: string;
   multiline?: boolean;
+  type?: string;
+  disabled?: boolean;
+  error?: string | null;
   onCommit: (value: string) => void;
 }) {
-  const className = `${value ? "flash" : ""} w-full rounded-xl border border-black/10 dark:border-white/15 bg-transparent px-3 py-2 text-sm outline-none focus:border-blue-500`;
+  const className = `${value ? "flash" : ""} w-full rounded-xl border ${
+    error ? "border-red-500" : "border-black/10 dark:border-white/15"
+  } bg-transparent px-3 py-2 text-sm outline-none focus:border-blue-500 disabled:opacity-70`;
   const commit = (e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => onCommit(e.currentTarget.value);
   return (
     <label className="flex flex-col gap-1">
@@ -433,14 +611,72 @@ function Field({
       ) : (
         <input
           key={value ?? ""}
+          type={type}
           defaultValue={value ?? ""}
           placeholder={placeholder}
+          disabled={disabled}
           onBlur={commit}
           onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
           className={className}
         />
       )}
+      {error && <span className="text-xs text-red-600">{error}</span>}
     </label>
+  );
+}
+
+const HELP_ACTIONS: { label: string; send?: string; prefill?: string }[] = [
+  { label: "What came in today?", send: "What came in today?" },
+  { label: "Summarize yesterday", send: "Summarize my email from yesterday." },
+  { label: "Summarize this week", send: "Summarize my email from this week." },
+  { label: "Find an email…", prefill: "Find the email from " },
+  { label: "Read the latest from…", prefill: "Read the latest email from " },
+  { label: "Draft a reply…", prefill: "Draft a reply to the latest email from " },
+];
+
+function HelpActions({
+  access,
+  inCall,
+  onAsk,
+  onPrefill,
+}: {
+  access: ReturnType<typeof mailAccess>;
+  inCall: boolean;
+  onAsk: (text: string) => void;
+  onPrefill: (text: string) => void;
+}) {
+  const locked = access !== "unlocked";
+  return (
+    <div className="flex flex-col gap-2 px-1">
+      <div className="flex items-baseline justify-between">
+        <p className="text-xs font-medium">What I can do</p>
+        <p className="text-[11px] opacity-50">
+          {access === "unlocked" ? "Email help unlocked" : access === "expired" ? "🔒 Reconnect Gmail" : "🔒 Connect Gmail to unlock"}
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {HELP_ACTIONS.map((a) => {
+          const disabled = inCall && !a.send; // can't prefill the chat box during a call — say it instead
+          return (
+            <button
+              key={a.label}
+              disabled={disabled}
+              title={disabled ? "Say it on the call" : undefined}
+              onClick={() => (a.send ? onAsk(a.send) : onPrefill(a.prefill!))}
+              className={`rounded-full border px-2.5 py-1 text-xs transition-colors disabled:opacity-40 ${
+                locked
+                  ? "border-black/10 dark:border-white/15 opacity-60 hover:opacity-100"
+                  : "border-emerald-500/40 hover:bg-emerald-500/10"
+              }`}
+            >
+              {locked ? "🔒 " : ""}
+              {a.label}
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-[11px] opacity-50">Drafts are never sent — you can copy them or save to Gmail Drafts.</p>
+    </div>
   );
 }
 
@@ -448,20 +684,22 @@ function HowItWorks() {
   return (
     <div className="text-xs opacity-60 flex flex-col gap-1.5 px-1">
       <p className="font-medium">How it works</p>
-      <p>Your assistant needs a name, your name, what you&apos;d like help with, and (optionally) Gmail.</p>
-      <p>Fill them in any way you like: type in the fields, chat, or talk on a call. Fields update live as it listens.</p>
-      <p>Hang up anytime — the chat picks up where the call left off. Gmail connects via a Google popup, read-only.</p>
-      <p>Know what you want already? Skip ahead.</p>
+      <p>Talk, type, or fill in the fields — all three work together and update live.</p>
+      <p>Ask for help anytime. Setup never blocks you; connecting Gmail unlocks email help.</p>
+      <p>Gmail connects via a Google popup. The assistant can read, summarize and draft — it never sends or deletes.</p>
+      <p>Hang up anytime — the chat picks up where the call left off.</p>
     </div>
   );
 }
 
 function GmailCard({
+  reconnect,
   busy,
   error,
   onConnect,
   onDecline,
 }: {
+  reconnect: boolean;
   busy: boolean;
   error: string | null;
   onConnect: () => void;
@@ -469,16 +707,60 @@ function GmailCard({
 }) {
   return (
     <div className="w-full rounded-2xl border border-blue-500/40 bg-blue-500/5 p-4 flex flex-col gap-3 text-left">
-      <p className="text-sm">Connect Gmail so I can spot things to take off your plate. Read-only — I can&apos;t send anything.</p>
+      <p className="text-sm">
+        {reconnect
+          ? "Gmail access expired for this session — reconnect to continue."
+          : "Connect Gmail so I can summarize, find and read your email and draft replies. I never send or delete anything."}
+      </p>
       <div className="flex gap-2">
         <button onClick={onConnect} disabled={busy} className="rounded-full bg-blue-600 text-white px-4 py-2 text-sm font-medium disabled:opacity-50">
-          {busy ? "Connecting…" : "Connect Gmail"}
+          {busy ? "Connecting…" : reconnect ? "Reconnect Gmail" : "Connect Gmail"}
         </button>
-        <button onClick={onDecline} className="rounded-full px-4 py-2 text-sm opacity-60">
-          Not now
-        </button>
+        {!reconnect && (
+          <button onClick={onDecline} className="rounded-full px-4 py-2 text-sm opacity-60">
+            Not now
+          </button>
+        )}
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
+    </div>
+  );
+}
+
+function DraftCard({ draft, onChange, onSave }: { draft: DraftItem; onChange: (body: string) => void; onSave: () => void }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="w-full rounded-2xl border border-violet-500/40 bg-violet-500/5 p-4 flex flex-col gap-2 text-left text-sm">
+      <div className="text-xs opacity-70">
+        <p className="truncate">To: {draft.to}</p>
+        <p className="truncate">Subject: {draft.subject}</p>
+      </div>
+      <textarea
+        value={draft.body}
+        onChange={(e) => onChange(e.target.value)}
+        rows={Math.min(10, draft.body.split("\n").length + 1)}
+        className="w-full rounded-xl border border-black/10 dark:border-white/15 bg-background px-3 py-2 outline-none focus:border-violet-500"
+      />
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => {
+            void navigator.clipboard?.writeText(draft.body);
+            setCopied(true);
+          }}
+          className="rounded-full border border-black/15 dark:border-white/20 px-3 py-1.5 text-xs"
+        >
+          {copied ? "Copied ✓" : "Copy"}
+        </button>
+        <button
+          onClick={onSave}
+          disabled={draft.status === "saving" || draft.status === "saved"}
+          className="rounded-full bg-violet-600 text-white px-3 py-1.5 text-xs font-medium disabled:opacity-60"
+        >
+          {draft.status === "saving" ? "Saving…" : draft.status === "saved" ? "Saved to Gmail Drafts ✓" : "Save to Gmail Drafts"}
+        </button>
+        <span className="text-[11px] opacity-50">Never sent</span>
+      </div>
+      {draft.error && <p className="text-xs text-red-600">{draft.error}</p>}
     </div>
   );
 }
@@ -512,37 +794,6 @@ function Message({ message }: { message: ChatMessage }) {
         {message.metadata?.channel === "voice" && <span className="mr-1 opacity-60">🎙️</span>}
         {text}
       </div>
-    </div>
-  );
-}
-
-function Graduated({ state, farewell, onReset }: { state: OnboardingState; farewell: string; onReset: () => void }) {
-  return (
-    <div className="mx-auto max-w-xl w-full px-4 py-16 flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold">You&apos;re all set{state.userName ? `, ${state.userName}` : ""} 🎉</h1>
-      {farewell && (
-        <div className="rounded-2xl px-4 py-3 bg-black/5 dark:bg-white/10 whitespace-pre-wrap">
-          <p className="text-xs opacity-60 mb-1">{state.agentName ?? "Your assistant"}</p>
-          {farewell}
-        </div>
-      )}
-      <p className="opacity-70">
-        {state.agentName ?? "Your assistant"} is ready to help
-        {state.helpNeed ? ` with: ${state.helpNeed}` : "."}
-      </p>
-      {state.gmail.insights?.length ? (
-        <div className="flex flex-col gap-2">
-          <p className="text-sm font-medium">From your inbox, I can start on:</p>
-          <ul className="list-disc pl-5 text-sm opacity-80">
-            {state.gmail.insights.map((i) => (
-              <li key={i}>{i}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-      <button onClick={onReset} className="self-start text-sm underline opacity-60">
-        Start over
-      </button>
     </div>
   );
 }

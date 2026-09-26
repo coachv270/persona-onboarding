@@ -6,15 +6,18 @@ import {
   useConversationClientTool,
   type DisconnectionDetails,
 } from "@elevenlabs/react";
-import { describeState, reducer, type Action, type OnboardingState } from "@/lib/onboarding";
-import { UNNAMED_AGENT, voiceFirstMessage } from "@/lib/prompts";
+import type { Action, OnboardingState } from "@/lib/onboarding";
+import { UNNAMED_AGENT, voiceContext, voiceFirstMessage } from "@/lib/prompts";
 import { devlog } from "@/lib/devlog";
 
 interface Props {
   state: OnboardingState;
   dispatch: Dispatch<Action>;
+  hasToken: boolean;
   // true: the user tapped "Call" (dial immediately); false: the text agent is ringing them.
   autoStart: boolean;
+  // Shared tool implementation (same as the chat's).
+  runTool: (name: string, input: Record<string, unknown>, detail: "voice" | "text") => Promise<string>;
   onTranscript: (role: "user" | "agent", text: string) => void;
   onEnded: (reason: string) => void;
   onDecline: () => void;
@@ -50,7 +53,7 @@ async function fetchToken(): Promise<string> {
   return body.token;
 }
 
-export function VoiceCall({ state, dispatch, autoStart, onTranscript, onEnded, onDecline, children }: Props) {
+export function VoiceCall({ state, dispatch, hasToken, autoStart, runTool, onTranscript, onEnded, onDecline, children }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [lines, setLines] = useState<Line[]>([]);
   const [connectedAt, setConnectedAt] = useState<number | null>(null);
@@ -92,51 +95,24 @@ export function VoiceCall({ state, dispatch, autoStart, onTranscript, onEnded, o
     },
   });
 
-  // Apply the action locally too, so the tool result tells the agent the
-  // updated picture immediately (React state won't have re-rendered yet).
-  const apply = (action: Action) => {
-    dispatch(action);
-    stateRef.current = reducer(stateRef.current, action);
-    return describeState(stateRef.current);
+  // Thin wrappers: every tool runs the same shared implementation as the chat
+  // (Onboarding's runTool). Names must match the client tools on the ElevenLabs
+  // agent (docs/VOICE_AGENT.md). Params arrive untyped, so runTool coerces them.
+  const tool = (name: string) => (params: Record<string, unknown>) => {
+    devlog("tool", `voice → ${name}`, params);
+    return runTool(name, params, "voice");
   };
-
-  // Names must match the client tools configured on the ElevenLabs agent (docs/VOICE_AGENT.md).
-  // Params arrive untyped from the LLM, so coerce rather than trust them.
-  const logTool = (name: string, params: unknown) => devlog("tool", `voice → ${name}`, params);
-  useConversationClientTool("setAgentName", (p) => {
-    logTool("setAgentName", p);
-    return `Saved.\n${apply({ type: "setAgentName", value: String(p.name ?? "") })}`;
-  });
-  useConversationClientTool("setUserName", (p) => {
-    logTool("setUserName", p);
-    return `Saved.\n${apply({ type: "setUserName", value: String(p.name ?? "") })}`;
-  });
-  useConversationClientTool("setHelpNeed", (p) => {
-    logTool("setHelpNeed", p);
-    return `Saved.\n${apply({ type: "setHelpNeed", value: String(p.need ?? "") })}`;
-  });
-  useConversationClientTool("showGmailButton", () => {
-    logTool("showGmailButton", {});
-    apply({ type: "gmail", value: { status: "offered" } });
-    return "A 'Connect Gmail' button is now visible on the user's screen. Keep talking; you'll get an update when it's connected.";
-  });
-  useConversationClientTool("graduate", () => {
-    logTool("graduate", {});
-    apply({ type: "graduate" });
-    return "Onboarding complete. Say a short, warm goodbye, then end the call.";
-  });
-
-  // Gmail connects via a popup while the call keeps running — tell the agent.
-  const sentGmailUpdate = useRef(false);
-  useEffect(() => {
-    if (conversation.status !== "connected" || state.gmail.status !== "connected" || sentGmailUpdate.current) return;
-    sentGmailUpdate.current = true;
-    devlog("voice", "context update → voice agent: Gmail connected");
-    conversation.sendContextualUpdate(
-      `Gmail is now connected (${state.gmail.email ?? "unknown address"}).` +
-        (state.gmail.insights?.length ? ` Ideas from their inbox: ${state.gmail.insights.join("; ")}` : ""),
-    );
-  }, [conversation, state.gmail]);
+  useConversationClientTool("setAgentName", tool("setAgentName"));
+  useConversationClientTool("setUserName", tool("setUserName"));
+  useConversationClientTool("setUserEmail", tool("setUserEmail"));
+  useConversationClientTool("setHelpNeed", tool("setHelpNeed"));
+  useConversationClientTool("showGmailButton", tool("showGmailButton"));
+  useConversationClientTool("declineGmail", tool("declineGmail"));
+  useConversationClientTool("graduate", tool("graduate"));
+  useConversationClientTool("summarizeInbox", tool("summarizeInbox"));
+  useConversationClientTool("findEmails", tool("findEmails"));
+  useConversationClientTool("readEmail", tool("readEmail"));
+  useConversationClientTool("showDraft", tool("showDraft"));
 
   // Prefetch the token while ringing so "Answer" starts audio inside the click
   // gesture — Safari won't unlock audio after an extra network round trip.
@@ -149,14 +125,14 @@ export function VoiceCall({ state, dispatch, autoStart, onTranscript, onEnded, o
     setError(null);
     const snapshot = stateRef.current;
     endedRef.current = false;
-    sentGmailUpdate.current = snapshot.gmail.status === "connected";
     dispatch({ type: "callConnecting" });
     try {
       const token = (await tokenRef.current) || (await fetchToken());
       tokenRef.current = null; // single-use
+      const knownInfo = voiceContext(snapshot, hasToken);
       devlog("voice", `Dialing (attempt ${snapshot.call.attempts + 1})`, {
         firstMessage: voiceFirstMessage(snapshot),
-        known_info: describeState(snapshot),
+        known_info: knownInfo,
       });
       conversation.startSession({
         conversationToken: token,
@@ -165,7 +141,7 @@ export function VoiceCall({ state, dispatch, autoStart, onTranscript, onEnded, o
         // we fill its variables and pick a greeting that fits what's already known.
         dynamicVariables: {
           agent_name: snapshot.agentName ?? UNNAMED_AGENT,
-          known_info: describeState(snapshot),
+          known_info: knownInfo,
         },
         overrides: { agent: { firstMessage: voiceFirstMessage(snapshot) } },
       });
