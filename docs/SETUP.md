@@ -70,6 +70,10 @@ ELEVENLABS_API_KEY=...   # Settings → API keys
 3. Add the six environment variables above (mark the server secrets **Sensitive**) → **Deploy**.
 4. Add the resulting `https://<app>.vercel.app` to the Google OAuth client's **Authorized JavaScript origins**.
 
+## Notes
+
+- Email capture needs no setup: `/api/email-provider` uses DNS (MX) to tell Google accounts, including Workspace domains, from other providers.
+
 ## Security checklist
 
 - Server secrets (`GOOGLE_GENERATIVE_AI_API_KEY`, `ELEVENLABS_API_KEY`, `GOOGLE_CLIENT_SECRET`, `SESSION_SECRET`) go only in `.env.local` (git-ignored) and in Vercel env vars marked **Sensitive**. Never give them a `NEXT_PUBLIC_` prefix.

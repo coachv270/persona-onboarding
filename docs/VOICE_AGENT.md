@@ -9,7 +9,7 @@ Agent **"My Agent"**, `agent_2301m3frxgp4f9vbd0ksry9tg3yh`. The prompt below is 
 | Area | Setting |
 |---|---|
 | Agent | Voice: Luna (Calm & Grounded). LLM: Gemini 3.8 Flash. Language: English. System prompt and first message: below. |
-| Client tools | Profile: `setAgentName(name)`, `setUserName(name)`, `setUserEmail(email)`, `setHelpNeed(need)`, `showGmailButton()`, `declineGmail()`, `graduate()`, with a 5 s timeout. Email: `summarizeInbox(after, before?)`, `findEmails(query)`, `readEmail(id)`, `showDraft(messageId, body)`, with a **20 s** timeout. All use **Wait for response** and are handled by `runTool()` in `Onboarding.tsx`, which the chat also uses. |
+| Client tools | Profile: `setAgentName(name)`, `setUserName(name)`, `setUserEmail(email)`, `setHelpNeed(need)`, `showGmailButton()`, `declineGmail()`, `graduate()`, with a 5 s timeout. Email: `summarizeInbox(after, before?)`, `findEmails(query)`, `readEmail(id)`, `showDraft(messageId, body)`, with a **20 s** timeout. All use **Wait for response** and are handled by `runTool()` in `Onboarding.tsx`, which the chat also uses. `setUserEmail` validates the address and reports whether it's a Google account (non-Google → "coming soon"). |
 | System tools | **End conversation** on. The SDK reports it as `onDisconnect({ reason: "agent", context.type: "end_call" })`. |
 | Security → Authentication | On. Calls need a conversation token from `/api/voice-token`, which uses `ELEVENLABS_API_KEY` on the server. |
 | Security → Overrides | **First message** only: the app always sends a greeting that fits what's known (`voiceFirstMessage()`). The system prompt is not overridable, so the dashboard is the source of truth. |
