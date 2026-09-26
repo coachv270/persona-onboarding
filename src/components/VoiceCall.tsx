@@ -24,10 +24,16 @@ function describeDisconnect(d: DisconnectionDetails): string {
     case "agent":
       return d.context?.type === "end_call" ? "you ended the call" : "the call dropped";
     case "error":
-      return d.context?.type === "max_duration_exceeded"
-        ? "the call hit its time limit"
-        : `connection error: ${d.message}`;
+      return d.context?.type === "max_duration_exceeded" ? "the call hit its time limit" : "the connection dropped";
   }
+}
+
+// Short, human reason for state + the model's context; raw details go to the console.
+function failureReason(message: string): string {
+  console.error("[voice] call failed:", message);
+  return /NotAllowedError|Permission denied|microphone/i.test(message)
+    ? "microphone access was blocked"
+    : "the call couldn't connect";
 }
 
 async function fetchToken(): Promise<string> {
@@ -58,9 +64,10 @@ export function VoiceCall({ state, dispatch, onTranscript, onEnded, onDecline }:
     onDisconnect: (details) => finish(describeDisconnect(details)),
     onMessage: ({ role, message }) => onTranscript(role, message),
     onError: (message) => {
-      setError(message);
       // Start failures (mic denied, bad token) only surface here, never via onDisconnect.
-      finish(/permission|notallowed/i.test(message) ? "microphone access was blocked" : `call failed: ${message}`);
+      const reason = failureReason(message);
+      setError(reason);
+      finish(reason);
     },
   });
 
@@ -127,8 +134,9 @@ export function VoiceCall({ state, dispatch, onTranscript, onEnded, onDecline }:
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      setError(message);
-      finish(`call failed: ${message}`);
+      const reason = failureReason(message);
+      setError(reason);
+      finish(reason);
     }
   };
 

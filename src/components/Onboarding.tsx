@@ -195,7 +195,10 @@ export function Onboarding({
   }, [messages, showCall, state.gmail.status]);
 
   if (state.graduated && !inCall) {
-    return <Graduated state={state} onReset={onReset} />;
+    // The graduate tool fires before the reply streams in, so keep showing that reply here.
+    const last = messages.at(-1);
+    const farewell = last?.role === "assistant" && !last.metadata?.hidden ? messageText(last) : "";
+    return <Graduated state={state} farewell={farewell} onReset={onReset} />;
   }
 
   return (
@@ -272,12 +275,17 @@ export function Onboarding({
   );
 }
 
-function Message({ message }: { message: ChatMessage }) {
-  if (message.metadata?.hidden) return null;
-  const text = message.parts
+function messageText(message: ChatMessage): string {
+  return message.parts
     .filter((p) => p.type === "text")
     .map((p) => p.text)
-    .join("");
+    .join("")
+    .trim();
+}
+
+function Message({ message }: { message: ChatMessage }) {
+  if (message.metadata?.hidden) return null;
+  const text = messageText(message);
   if (!text) return null;
   const mine = message.role === "user";
   return (
@@ -303,10 +311,16 @@ function Chip({ done, label }: { done: boolean; label: string }) {
   );
 }
 
-function Graduated({ state, onReset }: { state: OnboardingState; onReset: () => void }) {
+function Graduated({ state, farewell, onReset }: { state: OnboardingState; farewell: string; onReset: () => void }) {
   return (
     <div className="mx-auto max-w-xl w-full px-4 py-16 flex flex-col gap-6">
       <h1 className="text-2xl font-semibold">You&apos;re all set{state.userName ? `, ${state.userName}` : ""} 🎉</h1>
+      {farewell && (
+        <div className="rounded-2xl px-4 py-3 bg-black/5 dark:bg-white/10 whitespace-pre-wrap">
+          <p className="text-xs opacity-60 mb-1">{state.agentName ?? "Your assistant"}</p>
+          {farewell}
+        </div>
+      )}
       <p className="opacity-70">
         {state.agentName ?? "Your assistant"} is ready to help
         {state.helpNeed ? ` with: ${state.helpNeed}` : "."}
