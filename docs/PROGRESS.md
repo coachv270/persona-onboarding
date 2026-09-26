@@ -36,6 +36,10 @@ It should try a web voice call to collect everything except the agent name. It m
 - [x] Vercel env vars set (Production + Preview) and redeployed. Verified live: chat and tool calls work; Google client ID is in the bundle.
 - [x] ElevenLabs agent configured and **published**: 4 client tools, End conversation, authentication, First-message override (see [VOICE_AGENT.md](VOICE_AGENT.md#agent-configuration-live)).
 
+- [x] Adaptive UI: profile fields (assistant name, your name, need, Gmail) editable directly; chat and call can fill any of them; call available anytime. Voice agent got `setAgentName` + prompt for an unnamed start (verified via ElevenLabs simulation).
+- [x] Dev panel (top right): timestamped log of chat, tools, voice, state, Gmail and errors; "Clear local data" with confirmation.
+- [x] Gmail popup flow verified end to end on localhost.
+
 ## Remaining
 
 - [ ] ElevenLabs API key: grant **ElevenAgents write** (`convai_write`) permission. `/api/voice-token` currently returns 401 `missing_permissions`. Editing the existing key keeps its value, so there's no need to touch Vercel or `.env.local`.

@@ -1,8 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { ConversationProvider } from "@elevenlabs/react";
 import { Onboarding, loadMessages } from "./Onboarding";
 import { loadState } from "@/lib/onboarding";
+import { devlog } from "@/lib/devlog";
+import { DevPanel } from "./DevPanel";
 
 // Client-only (see page.tsx), so reading localStorage during render is safe.
 export default function App() {
@@ -12,10 +15,20 @@ export default function App() {
 
   const reset = () => {
     try {
-      localStorage.clear();
+      // Keep the dev log across resets; it's the history of every run.
+      for (const key of ["persona-onboarding-v1", "persona-onboarding-messages-v1"]) localStorage.removeItem(key);
     } catch {}
+    devlog("state", "Start over");
     setSession((n) => n + 1);
   };
 
-  return <Onboarding key={session} initialState={initial.state} initialMessages={initial.messages} onReset={reset} />;
+  // Provider sits above Onboarding so on-screen edits can reach a live call.
+  return (
+    <>
+      <ConversationProvider key={session}>
+        <Onboarding initialState={initial.state} initialMessages={initial.messages} onReset={reset} />
+      </ConversationProvider>
+      <DevPanel />
+    </>
+  );
 }

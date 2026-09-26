@@ -31,12 +31,13 @@ https://elevenlabs.io/app/agents → **Create agent → Blank**.
 
 - **Agent**: pick a voice; LLM = a Gemini Flash model. Paste the system prompt and first message from [VOICE_AGENT.md](VOICE_AGENT.md). The app fills `{{agent_name}}` and `{{known_info}}` at call start.
 - **Security**:
-  - Enable the **First message** override (the app swaps in a "sorry we got cut off" greeting on callbacks).
+  - Enable the **First message** override (the app always sends a greeting that fits what's already known).
   - Enable **authentication** (private agent). The app mints a WebRTC conversation token server-side via `/api/voice-token`.
 - **Tools → Add tool → Client tool** (tick **Wait for response** on each; names are case-sensitive and must match `src/components/VoiceCall.tsx`):
 
   | Name | Description | Parameters |
   |---|---|---|
+  | `setAgentName` | Save the name the user picks for the assistant. | `name` — string, required |
   | `setUserName` | Save the user's name as soon as they say it. | `name` — string, required |
   | `setHelpNeed` | Save something concrete the user wants help with. | `need` — string, required |
   | `showGmailButton` | Show a "Connect Gmail" button on the user's screen. | — |

@@ -24,3 +24,13 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Briefly highlight a field when an agent fills it in. */
+@keyframes flash {
+  from {
+    background-color: rgb(16 185 129 / 0.25);
+  }
+}
+.flash {
+  animation: flash 1.2s ease-out;
+}

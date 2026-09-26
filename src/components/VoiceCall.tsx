@@ -1,21 +1,28 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type Dispatch } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type Dispatch, type ReactNode } from "react";
 import {
   useConversation,
   useConversationClientTool,
   type DisconnectionDetails,
 } from "@elevenlabs/react";
 import { describeState, reducer, type Action, type OnboardingState } from "@/lib/onboarding";
-import { voiceFirstMessage } from "@/lib/prompts";
+import { UNNAMED_AGENT, voiceFirstMessage } from "@/lib/prompts";
+import { devlog } from "@/lib/devlog";
 
 interface Props {
   state: OnboardingState;
   dispatch: Dispatch<Action>;
+  // true: the user tapped "Call" (dial immediately); false: the text agent is ringing them.
+  autoStart: boolean;
   onTranscript: (role: "user" | "agent", text: string) => void;
   onEnded: (reason: string) => void;
   onDecline: () => void;
+  // Shown under the captions, e.g. the Connect Gmail card.
+  children?: ReactNode;
 }
+
+type Line = { role: "user" | "agent"; text: string };
 
 function describeDisconnect(d: DisconnectionDetails): string {
   switch (d.reason) {
@@ -30,7 +37,7 @@ function describeDisconnect(d: DisconnectionDetails): string {
 
 // Short, human reason for state + the model's context; raw details go to the console.
 function failureReason(message: string): string {
-  console.error("[voice] call failed:", message);
+  devlog("error", `Voice call failed: ${message}`);
   return /NotAllowedError|Permission denied|microphone/i.test(message)
     ? "microphone access was blocked"
     : "the call couldn't connect";
@@ -43,8 +50,10 @@ async function fetchToken(): Promise<string> {
   return body.token;
 }
 
-export function VoiceCall({ state, dispatch, onTranscript, onEnded, onDecline }: Props) {
+export function VoiceCall({ state, dispatch, autoStart, onTranscript, onEnded, onDecline, children }: Props) {
   const [error, setError] = useState<string | null>(null);
+  const [lines, setLines] = useState<Line[]>([]);
+  const [connectedAt, setConnectedAt] = useState<number | null>(null);
   const tokenRef = useRef<Promise<string> | null>(null);
   const endedRef = useRef(true);
   const stateRef = useRef(state);
@@ -55,14 +64,26 @@ export function VoiceCall({ state, dispatch, onTranscript, onEnded, onDecline }:
   const finish = (reason: string) => {
     if (endedRef.current) return; // onError and onDisconnect can both fire
     endedRef.current = true;
+    devlog("voice", `Call ended: ${reason}`);
     dispatch({ type: "callEnded", reason });
     onEnded(reason);
   };
 
   const conversation = useConversation({
-    onConnect: () => dispatch({ type: "callActive" }),
-    onDisconnect: (details) => finish(describeDisconnect(details)),
-    onMessage: ({ role, message }) => onTranscript(role, message),
+    onConnect: ({ conversationId }) => {
+      devlog("voice", "Connected", { conversationId });
+      setConnectedAt(Date.now());
+      dispatch({ type: "callActive" });
+    },
+    onDisconnect: (details) => {
+      devlog("voice", `Disconnected (${details.reason})`, details);
+      finish(describeDisconnect(details));
+    },
+    onMessage: ({ role, message }) => {
+      devlog("voice", `${role === "user" ? "user" : (stateRef.current.agentName ?? "agent")}: ${message}`);
+      setLines((prev) => [...prev.slice(-2), { role, text: message }]);
+      onTranscript(role, message);
+    },
     onError: (message) => {
       // Start failures (mic denied, bad token) only surface here, never via onDisconnect.
       const reason = failureReason(message);
@@ -79,15 +100,28 @@ export function VoiceCall({ state, dispatch, onTranscript, onEnded, onDecline }:
     return describeState(stateRef.current);
   };
 
-  // Names must match the client tools configured on the ElevenLabs agent (docs/SETUP.md).
+  // Names must match the client tools configured on the ElevenLabs agent (docs/VOICE_AGENT.md).
   // Params arrive untyped from the LLM, so coerce rather than trust them.
-  useConversationClientTool("setUserName", (p) => `Saved.\n${apply({ type: "setUserName", value: String(p.name ?? "") })}`);
-  useConversationClientTool("setHelpNeed", (p) => `Saved.\n${apply({ type: "setHelpNeed", value: String(p.need ?? "") })}`);
+  const logTool = (name: string, params: unknown) => devlog("tool", `voice → ${name}`, params);
+  useConversationClientTool("setAgentName", (p) => {
+    logTool("setAgentName", p);
+    return `Saved.\n${apply({ type: "setAgentName", value: String(p.name ?? "") })}`;
+  });
+  useConversationClientTool("setUserName", (p) => {
+    logTool("setUserName", p);
+    return `Saved.\n${apply({ type: "setUserName", value: String(p.name ?? "") })}`;
+  });
+  useConversationClientTool("setHelpNeed", (p) => {
+    logTool("setHelpNeed", p);
+    return `Saved.\n${apply({ type: "setHelpNeed", value: String(p.need ?? "") })}`;
+  });
   useConversationClientTool("showGmailButton", () => {
+    logTool("showGmailButton", {});
     apply({ type: "gmail", value: { status: "offered" } });
     return "A 'Connect Gmail' button is now visible on the user's screen. Keep talking; you'll get an update when it's connected.";
   });
   useConversationClientTool("graduate", () => {
+    logTool("graduate", {});
     apply({ type: "graduate" });
     return "Onboarding complete. Say a short, warm goodbye, then end the call.";
   });
@@ -97,6 +131,7 @@ export function VoiceCall({ state, dispatch, onTranscript, onEnded, onDecline }:
   useEffect(() => {
     if (conversation.status !== "connected" || state.gmail.status !== "connected" || sentGmailUpdate.current) return;
     sentGmailUpdate.current = true;
+    devlog("voice", "context update → voice agent: Gmail connected");
     conversation.sendContextualUpdate(
       `Gmail is now connected (${state.gmail.email ?? "unknown address"}).` +
         (state.gmail.insights?.length ? ` Ideas from their inbox: ${state.gmail.insights.join("; ")}` : ""),
@@ -119,18 +154,20 @@ export function VoiceCall({ state, dispatch, onTranscript, onEnded, onDecline }:
     try {
       const token = (await tokenRef.current) || (await fetchToken());
       tokenRef.current = null; // single-use
+      devlog("voice", `Dialing (attempt ${snapshot.call.attempts + 1})`, {
+        firstMessage: voiceFirstMessage(snapshot),
+        known_info: describeState(snapshot),
+      });
       conversation.startSession({
         conversationToken: token,
         connectionType: "webrtc",
         // The system prompt lives in the ElevenLabs dashboard (docs/VOICE_AGENT.md);
-        // we only fill its variables, plus a tailored greeting for callbacks.
+        // we fill its variables and pick a greeting that fits what's already known.
         dynamicVariables: {
-          agent_name: snapshot.agentName ?? "your assistant",
+          agent_name: snapshot.agentName ?? UNNAMED_AGENT,
           known_info: describeState(snapshot),
         },
-        ...(snapshot.call.attempts > 0 && {
-          overrides: { agent: { firstMessage: voiceFirstMessage(snapshot) } },
-        }),
+        overrides: { agent: { firstMessage: voiceFirstMessage(snapshot) } },
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -140,43 +177,82 @@ export function VoiceCall({ state, dispatch, onTranscript, onEnded, onDecline }:
     }
   };
 
+  // Dialed from a click: start right away (the token prefetch above is already in flight).
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (!autoStart || autoStarted.current) return;
+    autoStarted.current = true;
+    void answer();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
+  }, []);
+
   const live = conversation.status === "connected" || conversation.status === "connecting";
+  const dialing = !live && state.call.status === "connecting";
+  const agentName = state.agentName ?? "Your new assistant";
+
+  let status: ReactNode;
+  if (conversation.status === "connected") {
+    status = (
+      <>
+        {conversation.isSpeaking ? `${agentName} is speaking` : "Listening…"}
+        {connectedAt && (
+          <>
+            {" · "}
+            <CallTimer since={connectedAt} />
+          </>
+        )}
+      </>
+    );
+  } else if (live || dialing || autoStart) {
+    status = "Calling…";
+  } else {
+    status = "Incoming call";
+  }
 
   return (
-    <div className="rounded-2xl border border-black/10 dark:border-white/15 p-5 flex flex-col items-center gap-4 text-center">
-      <div
-        className={`size-20 rounded-full flex items-center justify-center text-3xl transition-all ${
-          conversation.isSpeaking ? "bg-emerald-500/30 scale-110" : live ? "bg-emerald-500/15" : "bg-black/5 dark:bg-white/10 animate-pulse"
-        }`}
-      >
-        📞
-      </div>
-      <div>
-        <p className="font-medium">{state.agentName ?? "Your assistant"}</p>
-        <p className="text-sm opacity-60">
-          {conversation.status === "connecting"
-            ? "Connecting…"
-            : conversation.status === "connected"
-              ? conversation.isSpeaking
-                ? "Speaking…"
-                : "Listening…"
-              : "Incoming call"}
-        </p>
+    <div className="h-full w-full py-6 flex flex-col items-center gap-6 text-center">
+      <div className="flex-1 w-full flex flex-col items-center justify-center gap-5">
+        <div
+          className={`size-28 rounded-full flex items-center justify-center text-4xl font-semibold transition-all duration-300 ${
+            conversation.isSpeaking
+              ? "bg-emerald-500/30 ring-8 ring-emerald-500/15 scale-105"
+              : live
+                ? "bg-emerald-500/15"
+                : "bg-black/5 dark:bg-white/10 animate-pulse"
+          }`}
+        >
+          {state.agentName ? state.agentName.charAt(0).toUpperCase() : "✦"}
+        </div>
+        <div>
+          <p className="text-2xl font-semibold">{agentName}</p>
+          <p className="text-sm opacity-60 tabular-nums">{status}</p>
+        </div>
+
+        <div className="min-h-24 w-full flex flex-col justify-end gap-1.5 text-sm" aria-live="polite">
+          {lines.map((l, i) => (
+            <p key={i} className={l.role === "user" ? "opacity-50" : ""}>
+              {l.role === "user" ? "You: " : ""}
+              {l.text}
+            </p>
+          ))}
+        </div>
+
+        {children}
       </div>
 
-      {live ? (
+      {live || dialing || autoStart ? (
         <button
-          onClick={() => conversation.endSession()}
-          className="rounded-full bg-red-600 text-white px-6 py-2 font-medium"
+          onClick={() => (live ? conversation.endSession() : finish("the user hung up before it connected"))}
+          className="rounded-full bg-red-600 text-white px-8 py-3 font-medium"
         >
           Hang up
         </button>
       ) : (
         <div className="flex gap-3">
-          <button onClick={onDecline} className="rounded-full border border-black/15 dark:border-white/20 px-5 py-2">
+          <button onClick={onDecline} className="rounded-full border border-black/15 dark:border-white/20 px-5 py-3">
             Keep texting
           </button>
-          <button onClick={answer} className="rounded-full bg-emerald-600 text-white px-6 py-2 font-medium">
+          <button onClick={answer} className="rounded-full bg-emerald-600 text-white px-8 py-3 font-medium">
             Answer
           </button>
         </div>
@@ -185,4 +261,14 @@ export function VoiceCall({ state, dispatch, onTranscript, onEnded, onDecline }:
       {error && <p className="text-sm text-red-600">{error}</p>}
     </div>
   );
+}
+
+function CallTimer({ since }: { since: number }) {
+  const [now, setNow] = useState(since);
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const secs = Math.max(0, Math.floor((now - since) / 1000));
+  return <>{`${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`}</>;
 }
