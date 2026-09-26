@@ -46,7 +46,7 @@ npm run dev                  # http://localhost:3000
 | `src/components/Onboarding.tsx` | Layout, `runTool()`, chat, Gmail and draft cards, help actions, "How it works" |
 | `src/components/VoiceCall.tsx` | Call UI and lifecycle, voice client tools → `runTool()` |
 | `src/components/DevPanel.tsx`, `src/lib/devlog.ts` | Event log, Copy JSON, clear local data |
-| `src/components/ThemeToggle.tsx` | Light/dark switch (top left) |
+| `src/components/ThemeToggle.tsx` | Light/dark switch (top left); dark by default |
 | `src/lib/onboarding.ts` | State, reducer, `normalizeEmail`, `mailAccess` / `describeCapabilities` |
 | `src/lib/prompts.ts` | Chat prompt, voice `known_info`, adaptive voice greeting |
 | `src/lib/tools.ts` | Chat tool schemas (same names as the voice tools) |

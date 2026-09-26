@@ -13,7 +13,8 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const THEME_SCRIPT = `try{var t=localStorage.getItem("persona-theme");if(t==="dark"||(!t&&matchMedia("(prefers-color-scheme: dark)").matches))document.documentElement.classList.add("dark")}catch(e){}`;
+// Dark by default; a saved choice from the toggle wins.
+const THEME_SCRIPT = `try{if(localStorage.getItem("persona-theme")!=="light")document.documentElement.classList.add("dark")}catch(e){document.documentElement.classList.add("dark")}`;
 
 export const metadata: Metadata = {
   title: "Persona",

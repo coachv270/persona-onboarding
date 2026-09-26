@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 
-// Light/dark switch. The initial class is set by the inline script in layout.tsx;
-// the choice is saved so it survives reloads.
+// Light/dark switch (dark by default). The initial class is set by the inline
+// script in layout.tsx; the choice is saved so it survives reloads.
 export function ThemeToggle() {
   const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
   const toggle = () => {

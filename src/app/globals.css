@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* Apple-like look (matches the Persona site). Theme is class-based: <html class="dark">
-   is set by the toggle (or the OS preference on first visit) before paint. */
+   is the default, set before paint; the toggle saves a light/dark choice. */
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
