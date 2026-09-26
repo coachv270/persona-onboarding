@@ -363,6 +363,17 @@ export function Onboarding({
     notifyAgents("The user clicked 'Not now' on the Gmail button.", { chat: true });
   };
 
+  const discardDraft = (d: DraftItem) => {
+    setDrafts((ds) => ds.filter((x) => x.id !== d.id));
+    devlog("gmail", d.status === "saved" ? "Draft card dismissed (the Gmail draft stays)" : "Draft discarded");
+    notifyAgents(
+      d.status === "saved"
+        ? "The user closed the draft card; the saved Gmail draft is unchanged."
+        : "The user discarded the draft. Nothing was saved or sent. Ask if they want a different version.",
+      { chat: false },
+    );
+  };
+
   const updateDraft = (id: string, patch: Partial<DraftItem>) =>
     setDrafts((ds) => ds.map((d) => (d.id === id ? { ...d, ...patch } : d)));
 
@@ -419,7 +430,13 @@ export function Onboarding({
       />
     ) : null;
   const draftCards = drafts.map((d) => (
-    <DraftCard key={d.id} draft={d} onChange={(body) => updateDraft(d.id, { body, status: "idle" })} onSave={() => saveDraft(d)} />
+    <DraftCard
+      key={d.id}
+      draft={d}
+      onChange={(body) => updateDraft(d.id, { body, status: "idle" })}
+      onSave={() => saveDraft(d)}
+      onDiscard={() => discardDraft(d)}
+    />
   ));
 
   return (
@@ -847,7 +864,17 @@ function GmailCard({
   );
 }
 
-function DraftCard({ draft, onChange, onSave }: { draft: DraftItem; onChange: (body: string) => void; onSave: () => void }) {
+function DraftCard({
+  draft,
+  onChange,
+  onSave,
+  onDiscard,
+}: {
+  draft: DraftItem;
+  onChange: (body: string) => void;
+  onSave: () => void;
+  onDiscard: () => void;
+}) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="w-full rounded-3xl bg-surface p-4 flex flex-col gap-2 text-left text-sm">
@@ -881,6 +908,14 @@ function DraftCard({ draft, onChange, onSave }: { draft: DraftItem; onChange: (b
           className="rounded-full bg-foreground text-background px-3 py-1.5 text-xs font-medium disabled:opacity-60"
         >
           {draft.status === "saving" ? "Saving…" : draft.status === "saved" ? "Saved to Gmail Drafts ✓" : "Save to Gmail Drafts"}
+        </button>
+        <button
+          onClick={onDiscard}
+          disabled={draft.status === "saving"}
+          title={draft.status === "saved" ? "Remove this card; the Gmail draft stays" : "Throw this draft away"}
+          className="ml-auto rounded-full px-3 py-1.5 text-xs text-muted hover:text-red-600 disabled:opacity-40"
+        >
+          {draft.status === "saved" ? "Dismiss" : "Discard"}
         </button>
       </div>
       {draft.error && <p className="text-xs text-red-600">{draft.error}</p>}
