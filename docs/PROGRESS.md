@@ -1,6 +1,6 @@
 # Progress
 
-Status snapshot as of **2026-09-26**.
+Status snapshot as of **2026-09-26**. Live: https://persona-onboarding-phi.vercel.app
 
 ## Goal
 
@@ -50,24 +50,28 @@ Persona trial assignment, now one universal assistant with progressive unlock:
 
 - [x] All Gmail calls moved server-side; the browser never holds a Google token.
 - [x] Route guards (origin / Fetch Metadata), `server-only` modules, `npm run check:secrets`.
-- [x] Production **paused** on Vercel (503) until this ships.
-- [ ] Add `GOOGLE_CLIENT_SECRET` + `SESSION_SECRET` to `.env.local` and Vercel (Sensitive), test connect → summarize → Save to Drafts → Disconnect, merge, then resume the project.
+- [x] Shipped (PR #2): secrets on Vercel, project resumed, live checks passed.
+- [x] Connect → summarize → Save to Drafts → Disconnect verified on localhost.
+- [x] Email provider detection: Google (incl. Workspace via MX) can connect; others get "coming soon".
 
 ## Remaining
 
-- [ ] End-to-end on localhost with Gmail: "summarize yesterday", find/read, draft → Save to Gmail Drafts (appears in the thread, unsent), reload → Reconnect.
-- [ ] Voice: "what came in today?" should call summarizeInbox (not answer from memory); spelling an email; "no Gmail" → declineGmail.
-- [ ] Add reviewer emails as Google test users.
-- [ ] Merge the branch to `main` (deploys to Vercel).
+- [ ] Add reviewer emails as Google test users (or publish the consent screen) so the stress tester can connect Gmail.
+- [ ] Proactively attempt the call: ring once after the assistant is named (brief: "it should attempt a phone call").
+- [ ] Live voice checks: "what came in today?" calls summarizeInbox; spelling an email on the call; "no Gmail" → declineGmail.
+- [ ] Automated stress suite (ElevenLabs simulate-conversation + scripted chat): hangup, refusal, bad email, off-topic, silence, "just let me in".
+- [ ] Hardening: Retry on failed chat replies; rate limiting on `/api/chat` and `/api/voice-token`.
 
-## `.env.local` status
+## Environment status
 
-| Variable | Status |
-|---|---|
-| `GOOGLE_GENERATIVE_AI_API_KEY` | set |
-| `ELEVENLABS_AGENT_ID` | set |
-| `ELEVENLABS_API_KEY` | set |
-| `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | set (public) |
+| Variable | `.env.local` | Vercel |
+|---|---|---|
+| `GOOGLE_GENERATIVE_AI_API_KEY` | set | set |
+| `ELEVENLABS_API_KEY` | set | set |
+| `ELEVENLABS_AGENT_ID` | set | set |
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | set (public) | set |
+| `GOOGLE_CLIENT_SECRET` | set | set (Sensitive) |
+| `SESSION_SECRET` | set | set (Sensitive) |
 
 ## Notes / Gotchas
 

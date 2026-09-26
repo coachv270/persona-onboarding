@@ -6,6 +6,7 @@ import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls } fro
 import { useConversationControls, useConversationStatus } from "@elevenlabs/react";
 import {
   describeState,
+  isNonGoogle,
   mailAccess,
   missingSlots,
   normalizeEmail,
@@ -27,6 +28,7 @@ import {
 import type { Detail, Draft, MailResult } from "@/lib/mailTypes";
 import type { ChatMessage } from "@/lib/tools";
 import { devlog } from "@/lib/devlog";
+import { lookupEmailProvider, providerName } from "@/lib/emailProvider";
 import { VoiceCall } from "./VoiceCall";
 import { ThemeToggle } from "./ThemeToggle";
 
@@ -66,7 +68,9 @@ const FIELD_LABEL: Record<TextField, string> = {
   helpNeed: "what they need help with",
 };
 
-type DraftItem = Draft & { status: "idle" | "saving" | "saved" | "error"; error?: string };
+// "permission": a voice/chat save needs the one-time drafts permission, which
+// only a click can grant (Google popup).
+type DraftItem = Draft & { status: "idle" | "saving" | "saved" | "error" | "permission"; error?: string };
 
 export function Onboarding({
   initialState,
@@ -95,6 +99,10 @@ export function Onboarding({
   const [gmailError, setGmailError] = useState<string | null>(null);
   const [needReconnect, setNeedReconnect] = useState(false);
   const [drafts, setDrafts] = useState<DraftItem[]>([]);
+  const draftsRef = useRef(drafts);
+  useLayoutEffect(() => {
+    draftsRef.current = drafts;
+  }, [drafts]);
   const [input, setInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const voice = useConversationControls();
@@ -151,7 +159,15 @@ export function Onboarding({
         if (s.userEmailSource === "google" && email !== s.userEmail) {
           return `Their connected Gmail (${s.userEmail}) is used and wins over '${email}'. Mention it once.`;
         }
-        return apply({ type: "setUserEmail", value: email, source: "user" });
+        const provider = await lookupEmailProvider(email);
+        const summary = apply({ type: "setUserEmail", value: email, source: "user", provider });
+        const next =
+          provider === "google"
+            ? "It's a Google account, so Connect Gmail works with it (the Google popup suggests this address). Offer it if Gmail isn't connected."
+            : provider === "unknown"
+              ? "Couldn't tell if it's a Google account. They can still try Connect Gmail."
+              : `It's not a Google account (${providerName(provider)} email). Tell them, once, that connecting non-Google email is coming soon. If they also have a Google account, they can connect that instead.`;
+        return `${summary}\n${next}`;
       }
       case "requestGmailConnect":
       case "showGmailButton":
@@ -161,7 +177,9 @@ export function Onboarding({
           return "A Reconnect Gmail button is now showing (access expired this session).";
         }
         apply({ type: "gmail", value: { status: "offered" } });
-        return "A 'Connect Gmail' button is now showing on screen; the user clicks it in the browser.";
+        return isNonGoogle(stateRef.current)
+          ? "A card is showing that says connecting their non-Google email is coming soon, with an option to connect a Google account instead. Say that briefly."
+          : "A 'Connect Gmail' button is now showing on screen; the user clicks it in the browser.";
       case "declineGmail":
         return apply({ type: "gmail", value: { status: "declined" } });
       case "startCall":
@@ -176,6 +194,11 @@ export function Onboarding({
       case "readEmail":
       case "showDraft":
         return handleMail(await runMail(name, input, detail));
+      case "saveDraft": {
+        const d = [...draftsRef.current].reverse().find((x) => x.status !== "saved");
+        if (!d) return "There's no unsaved draft on screen. Offer to write one first.";
+        return persistDraft(d, false);
+      }
       default:
         devlog("error", `Unknown tool: ${name}`);
         return `Unknown tool ${name}.`;
@@ -309,6 +332,14 @@ export function Onboarding({
       if (stateRef.current.userEmailSource === "google") return "Your connected Gmail address is used.";
       v = email;
       apply({ type: "setUserEmail", value: v, source: "user" });
+      // Where is it hosted? Updates the Gmail slot and tells a live call.
+      void lookupEmailProvider(email).then((provider) => {
+        if (stateRef.current.userEmail !== email) return;
+        apply({ type: "setUserEmail", value: email, source: "user", provider });
+        if (provider !== "google" && provider !== "unknown") {
+          notifyAgents(`Their email ${email} isn't a Google account. Connecting non-Google email is coming soon; mention it once.`, { chat: false });
+        }
+      });
     } else {
       apply({ type: ({ agentName: "setAgentName", userName: "setUserName", helpNeed: "setHelpNeed" } as const)[field], value: v });
     }
@@ -377,9 +408,16 @@ export function Onboarding({
   const updateDraft = (id: string, patch: Partial<DraftItem>) =>
     setDrafts((ds) => ds.map((d) => (d.id === id ? { ...d, ...patch } : d)));
 
-  const saveDraft = async (d: DraftItem) => {
-    // Compose permission is only requested here, on click (popup first).
+  // Saves a draft to Gmail Drafts (never sends). Shared by the Save button and
+  // the saveDraft tool (voice/chat). The one-time compose permission needs a
+  // Google popup, which only a click can open.
+  const persistDraft = async (d: DraftItem, viaClick: boolean): Promise<string> => {
     const needCompose = !(gmailStore.get().scopes ?? []).includes(COMPOSE);
+    if (needCompose && !viaClick) {
+      updateDraft(d.id, { status: "permission", error: undefined });
+      devlog("gmail", "Voice/chat save needs the one-time drafts permission (click)");
+      return "Saving needs a one-time permission that only a click can grant. The Save to Gmail Drafts button is highlighted; ask them to click it once. After that, saving by voice works.";
+    }
     const codeP = needCompose ? requestAuthCode({ scope: COMPOSE, hint: stateRef.current.userEmail }) : null;
     updateDraft(d.id, { status: "saving", error: undefined });
     try {
@@ -389,13 +427,17 @@ export function Onboarding({
       if (r.needs) throw new Error(r.text);
       updateDraft(d.id, { status: "saved" });
       devlog("gmail", `Draft saved to Gmail Drafts (reply to ${d.to.replace(/.*</, "<")})`);
-      notifyAgents("The user saved the reply to their Gmail Drafts. It was NOT sent.", { chat: false });
+      if (viaClick) notifyAgents("The user saved the reply to their Gmail Drafts. It was NOT sent.", { chat: false });
+      return "Saved to Gmail Drafts. It was NOT sent. Tell them it's in their Drafts, ready to review and send themselves.";
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       devlog("error", `Save draft: ${message}`);
       updateDraft(d.id, { status: "error", error: message });
+      return `Saving failed (${message}). Apologize and suggest the Save button.`;
     }
   };
+
+  const saveDraft = (d: DraftItem) => void persistDraft(d, true);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -423,6 +465,7 @@ export function Onboarding({
     state.gmail.status === "offered" || showReconnect ? (
       <GmailCard
         reconnect={showReconnect}
+        comingSoon={!showReconnect && isNonGoogle(state) ? providerName(state.userEmailProvider) : null}
         busy={gmailBusy}
         error={gmailError}
         onConnect={connectGmail}
@@ -609,6 +652,13 @@ function ProfileCard({
           <p key={state.gmail.email} className="flash text-sm rounded-2xl px-3 py-2.5 bg-background text-imgreen">
             ✓ Connected
           </p>
+        ) : !connected && isNonGoogle(state) ? (
+          <div className="rounded-2xl px-3 py-2.5 bg-background text-sm flex flex-col gap-1">
+            <span>Connecting {providerName(state.userEmailProvider)} email is coming soon.</span>
+            <button onClick={onConnectGmail} disabled={gmailBusy} className="self-start text-xs text-imblue disabled:opacity-50">
+              {gmailBusy ? "Connecting…" : "Use a Google account instead"}
+            </button>
+          </div>
         ) : (
           <button
             onClick={onConnectGmail}
@@ -828,12 +878,15 @@ function HowItWorks() {
 
 function GmailCard({
   reconnect,
+  comingSoon,
   busy,
   error,
   onConnect,
   onDecline,
 }: {
   reconnect: boolean;
+  // Their email isn't Google-hosted: say so, and offer a Google account instead.
+  comingSoon: string | null;
   busy: boolean;
   error: string | null;
   onConnect: () => void;
@@ -842,16 +895,20 @@ function GmailCard({
   return (
     <div className="w-full rounded-3xl bg-surface p-4 flex flex-col gap-3 text-left">
       <div>
-        <p className="text-sm font-medium">{reconnect ? "Pick up where you left off." : "Bring your inbox."}</p>
+        <p className="text-sm font-medium">
+          {reconnect ? "Pick up where you left off." : comingSoon ? `${comingSoon} email is coming soon.` : "Bring your inbox."}
+        </p>
         <p className="text-sm text-muted">
           {reconnect
-            ? "Gmail access ends when the page reloads. Reconnect to continue."
-            : "Connect Gmail and I'll summarize, find and draft. I never send or delete anything."}
+            ? "Google access was lost. Reconnect to continue."
+            : comingSoon
+              ? "For now I can connect Google accounts only. Have one? Connect it and I'll summarize, find and draft. I never send or delete anything."
+              : "Connect Gmail and I'll summarize, find and draft. I never send or delete anything."}
         </p>
       </div>
       <div className="flex gap-2">
         <button onClick={onConnect} disabled={busy} className="rounded-full bg-imblue text-white px-4 py-2 text-sm font-medium disabled:opacity-50">
-          {busy ? "Connecting…" : reconnect ? "Reconnect Gmail" : "Connect Gmail"}
+          {busy ? "Connecting…" : reconnect ? "Reconnect Gmail" : comingSoon ? "Use a Google account" : "Connect Gmail"}
         </button>
         {!reconnect && (
           <button onClick={onDecline} className="rounded-full px-4 py-2 text-sm text-muted hover:text-foreground">
@@ -905,7 +962,9 @@ function DraftCard({
         <button
           onClick={onSave}
           disabled={draft.status === "saving" || draft.status === "saved"}
-          className="rounded-full bg-foreground text-background px-3 py-1.5 text-xs font-medium disabled:opacity-60"
+          className={`rounded-full bg-foreground text-background px-3 py-1.5 text-xs font-medium disabled:opacity-60 ${
+            draft.status === "permission" ? "ring-4 ring-imblue/50 animate-pulse" : ""
+          }`}
         >
           {draft.status === "saving" ? "Saving…" : draft.status === "saved" ? "Saved to Gmail Drafts ✓" : "Save to Gmail Drafts"}
         </button>
@@ -918,6 +977,9 @@ function DraftCard({
           {draft.status === "saved" ? "Dismiss" : "Discard"}
         </button>
       </div>
+      {draft.status === "permission" && (
+        <p className="text-xs text-imblue">One click needed: allow drafts access once. After that you can just say &ldquo;save it&rdquo;.</p>
+      )}
       {draft.error && <p className="text-xs text-red-600">{draft.error}</p>}
     </div>
   );

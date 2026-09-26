@@ -12,6 +12,7 @@ Persona: one universal AI assistant (text chat via Gemini, browser voice call vi
 | `src/lib/prompts.ts` | Chat prompt (`systemPrompt`), voice `{{known_info}}` (`voiceContext`), adaptive greeting (`voiceFirstMessage`) |
 | `src/lib/tools.ts` | Chat tool schemas (`chatTools`), `ChatMessage` type, `GEMINI_MODEL` |
 | `src/lib/gmail.ts` | Browser: Google popup (one-time code only), `/api/gmail/*` + `/api/mail` calls |
+| `src/lib/emailProvider.ts` + `src/app/api/email-provider` | Google account? (gmail.com or Google-hosted MX incl. Workspace). Non-Google → "coming soon" |
 | `src/lib/server/*` | Server-only: encrypted session cookie, Google code exchange/refresh/revoke, Gmail API, mail commands, origin guard |
 | `src/lib/devlog.ts`, `src/components/DevPanel.tsx` | Timestamped event log + red Dev button (clear local data) |
 | `src/components/App.tsx` | Loads persisted state/messages, handles "Start over" (client-only via `src/app/page.tsx`) |

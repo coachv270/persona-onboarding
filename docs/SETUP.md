@@ -50,6 +50,7 @@ https://elevenlabs.io/app/agents → **Create agent → Blank**.
   | `findEmails` | `query` | 20 s |
   | `readEmail` | `id` | 20 s |
   | `showDraft` | `messageId`, `body` | 20 s |
+  | `saveDraft` | none | 20 s |
 
   All parameters are strings. The quickest way is **Edit as JSON** with the template in [VOICE_AGENT.md](VOICE_AGENT.md).
 
@@ -69,6 +70,10 @@ ELEVENLABS_API_KEY=...   # Settings → API keys
 2. https://vercel.com/new → import the repo (Hobby plan is fine).
 3. Add the six environment variables above (mark the server secrets **Sensitive**) → **Deploy**.
 4. Add the resulting `https://<app>.vercel.app` to the Google OAuth client's **Authorized JavaScript origins**.
+
+## Notes
+
+- Email capture needs no setup: `/api/email-provider` uses DNS (MX) to tell Google accounts, including Workspace domains, from other providers.
 
 ## Security checklist
 
