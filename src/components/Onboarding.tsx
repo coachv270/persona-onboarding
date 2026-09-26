@@ -16,16 +16,15 @@ import {
 } from "@/lib/onboarding";
 import {
   COMPOSE,
-  createDraft,
-  fetchRecentMail,
-  getCachedToken,
-  getProfileEmail,
+  connectWithCode,
+  fetchInboxIdeas,
+  gmailStore,
   loadGis,
-  requestGmailToken,
-  tokenStore,
-  type Draft,
+  refreshGmailStatus,
+  requestAuthCode,
+  runMail,
 } from "@/lib/gmail";
-import { findEmails, prepareDraft, readEmail, summarizePeriod, type Detail, type MailResult } from "@/lib/mailCommands";
+import type { Detail, Draft, MailResult } from "@/lib/mailTypes";
 import type { ChatMessage } from "@/lib/tools";
 import { devlog } from "@/lib/devlog";
 import { VoiceCall } from "./VoiceCall";
@@ -100,9 +99,9 @@ export function Onboarding({
   const inputRef = useRef<HTMLInputElement>(null);
   const voice = useConversationControls();
   const { status: voiceStatus } = useConversationStatus();
-  // Re-render when a Gmail token is granted or dropped (tokens live in memory only).
-  useSyncExternalStore(tokenStore.subscribe, tokenStore.getSnapshot, tokenStore.getSnapshot);
-  const hasToken = !!getCachedToken();
+  // Server-side Gmail session (httpOnly cookie); the browser only knows whether it exists.
+  const gmail = useSyncExternalStore(gmailStore.subscribe, gmailStore.get, gmailStore.get);
+  const hasToken = gmail.connected;
   const access = mailAccess(state, hasToken);
 
   useEffect(() => {
@@ -110,6 +109,7 @@ export function Onboarding({
   }, [state]);
   useEffect(() => {
     loadGis().catch(() => {});
+    void refreshGmailStatus();
   }, []);
 
   // Apply locally too, so a tool result reports the updated picture immediately.
@@ -131,7 +131,6 @@ export function Onboarding({
 
   const runTool = async (name: string, input: Record<string, unknown>, detail: Detail): Promise<string> => {
     const str = (k: string) => String(input[k] ?? "").trim();
-    const ctx = { gmailConnected: stateRef.current.gmail.status === "connected", detail };
     const setText = (type: "setAgentName" | "setUserName" | "setHelpNeed", key: string) =>
       str(key) ? apply({ type, value: str(key) }) : "Empty value, ask again.";
 
@@ -157,7 +156,7 @@ export function Onboarding({
       case "requestGmailConnect":
       case "showGmailButton":
         if (stateRef.current.gmail.status === "connected") {
-          if (getCachedToken()) return "Gmail is already connected.";
+          if (gmailStore.get().connected) return "Gmail is already connected.";
           setNeedReconnect(true);
           return "A Reconnect Gmail button is now showing (access expired this session).";
         }
@@ -171,14 +170,12 @@ export function Onboarding({
       case "graduate":
         apply({ type: "graduate" });
         return "Noted, no more setup questions. Keep helping.";
+      // Email commands run on the server (/api/mail) with the session's Google token.
       case "summarizeInbox":
-        return handleMail(await summarizePeriod({ after: str("after"), before: str("before") || undefined }, ctx));
       case "findEmails":
-        return handleMail(await findEmails({ query: str("query") }, ctx));
       case "readEmail":
-        return handleMail(await readEmail({ id: str("id") }, ctx));
       case "showDraft":
-        return handleMail(await prepareDraft({ messageId: str("messageId"), body: String(input.body ?? "") }, ctx));
+        return handleMail(await runMail(name, input, detail));
       default:
         devlog("error", `Unknown tool: ${name}`);
         return `Unknown tool ${name}.`;
@@ -193,7 +190,7 @@ export function Onboarding({
         api: "/api/chat",
         body: () => ({
           onboardingState: stateRef.current,
-          hasGmailToken: !!getCachedToken(),
+          hasGmailToken: gmailStore.get().connected,
           now: new Date().toString(),
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         }),
@@ -323,16 +320,14 @@ export function Onboarding({
 
   const connectGmail = async () => {
     const before = stateRef.current;
-    // Popup first, synchronously inside the click — anything awaited before it gets blocked.
-    const tokenP = requestGmailToken({ hint: before.userEmail });
+    // Popup first, synchronously inside the click; anything awaited before it gets blocked.
+    const codeP = requestAuthCode({ hint: before.userEmail });
     setGmailError(null);
     setGmailBusy(true);
-    devlog("gmail", "Google popup opened");
+    devlog("gmail", "Google popup opened (code flow; the server holds the tokens)");
     try {
-      const token = await tokenP;
+      const { email = "" } = await connectWithCode(await codeP);
       setNeedReconnect(false);
-      const email = (await getProfileEmail(token)).toLowerCase();
-      devlog("gmail", `Authorized ${email}`);
       const mismatch =
         before.userEmail && before.userEmail !== email
           ? ` They'd given ${before.userEmail}; their Gmail is ${email}. Say (once) you'll use that.`
@@ -345,21 +340,7 @@ export function Onboarding({
         return;
       }
 
-      let insights: string[] = [];
-      try {
-        const mail = await fetchRecentMail(token);
-        const res = await fetch("/api/insights", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: mail.messages, helpNeed: stateRef.current.helpNeed }),
-        });
-        if (res.ok) insights = (await res.json()).insights;
-        else devlog("error", `Insights: HTTP ${res.status}`);
-      } catch (e) {
-        // Insights are a bonus; a connected inbox is what counts.
-        devlog("error", `Insights: ${e instanceof Error ? e.message : String(e)}`);
-      }
-      devlog("gmail", `Inbox ideas: ${insights.length}`, insights);
+      const insights = await fetchInboxIdeas(stateRef.current.helpNeed).catch(() => [] as string[]);
       apply({ type: "gmail", value: { status: "connected", email, insights } });
       notifyAgents(
         `Gmail connected (${email}). Email help is now unlocked.` +
@@ -382,15 +363,30 @@ export function Onboarding({
     notifyAgents("The user clicked 'Not now' on the Gmail button.", { chat: true });
   };
 
+  const discardDraft = (d: DraftItem) => {
+    setDrafts((ds) => ds.filter((x) => x.id !== d.id));
+    devlog("gmail", d.status === "saved" ? "Draft card dismissed (the Gmail draft stays)" : "Draft discarded");
+    notifyAgents(
+      d.status === "saved"
+        ? "The user closed the draft card; the saved Gmail draft is unchanged."
+        : "The user discarded the draft. Nothing was saved or sent. Ask if they want a different version.",
+      { chat: false },
+    );
+  };
+
   const updateDraft = (id: string, patch: Partial<DraftItem>) =>
     setDrafts((ds) => ds.map((d) => (d.id === id ? { ...d, ...patch } : d)));
 
   const saveDraft = async (d: DraftItem) => {
-    // Compose scope is only requested here, on click — popup first.
-    const tokenP = requestGmailToken({ scope: COMPOSE, hint: stateRef.current.userEmail });
+    // Compose permission is only requested here, on click (popup first).
+    const needCompose = !(gmailStore.get().scopes ?? []).includes(COMPOSE);
+    const codeP = needCompose ? requestAuthCode({ scope: COMPOSE, hint: stateRef.current.userEmail }) : null;
     updateDraft(d.id, { status: "saving", error: undefined });
     try {
-      await createDraft(await tokenP, d);
+      if (codeP) await connectWithCode(await codeP);
+      const draft: Draft = { id: d.id, threadId: d.threadId, to: d.to, subject: d.subject, body: d.body, inReplyTo: d.inReplyTo, references: d.references };
+      const r = await runMail("saveDraft", { draft }, "text");
+      if (r.needs) throw new Error(r.text);
       updateDraft(d.id, { status: "saved" });
       devlog("gmail", `Draft saved to Gmail Drafts (reply to ${d.to.replace(/.*</, "<")})`);
       notifyAgents("The user saved the reply to their Gmail Drafts. It was NOT sent.", { chat: false });
@@ -434,7 +430,13 @@ export function Onboarding({
       />
     ) : null;
   const draftCards = drafts.map((d) => (
-    <DraftCard key={d.id} draft={d} onChange={(body) => updateDraft(d.id, { body, status: "idle" })} onSave={() => saveDraft(d)} />
+    <DraftCard
+      key={d.id}
+      draft={d}
+      onChange={(body) => updateDraft(d.id, { body, status: "idle" })}
+      onSave={() => saveDraft(d)}
+      onDiscard={() => discardDraft(d)}
+    />
   ));
 
   return (
@@ -862,7 +864,17 @@ function GmailCard({
   );
 }
 
-function DraftCard({ draft, onChange, onSave }: { draft: DraftItem; onChange: (body: string) => void; onSave: () => void }) {
+function DraftCard({
+  draft,
+  onChange,
+  onSave,
+  onDiscard,
+}: {
+  draft: DraftItem;
+  onChange: (body: string) => void;
+  onSave: () => void;
+  onDiscard: () => void;
+}) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="w-full rounded-3xl bg-surface p-4 flex flex-col gap-2 text-left text-sm">
@@ -896,6 +908,14 @@ function DraftCard({ draft, onChange, onSave }: { draft: DraftItem; onChange: (b
           className="rounded-full bg-foreground text-background px-3 py-1.5 text-xs font-medium disabled:opacity-60"
         >
           {draft.status === "saving" ? "Saving…" : draft.status === "saved" ? "Saved to Gmail Drafts ✓" : "Save to Gmail Drafts"}
+        </button>
+        <button
+          onClick={onDiscard}
+          disabled={draft.status === "saving"}
+          title={draft.status === "saved" ? "Remove this card; the Gmail draft stays" : "Throw this draft away"}
+          className="ml-auto rounded-full px-3 py-1.5 text-xs text-muted hover:text-red-600 disabled:opacity-40"
+        >
+          {draft.status === "saved" ? "Dismiss" : "Discard"}
         </button>
       </div>
       {draft.error && <p className="text-xs text-red-600">{draft.error}</p>}

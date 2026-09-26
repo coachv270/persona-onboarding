@@ -20,8 +20,10 @@ In https://console.cloud.google.com:
    - **Data access**: add `https://www.googleapis.com/auth/gmail.readonly` and `https://www.googleapis.com/auth/gmail.compose` (compose is requested only when the user clicks Save to Gmail Drafts).
 4. **Clients → Create client → Web application**:
    - **Authorized JavaScript origins**: `http://localhost:3000` and `https://<your-app>.vercel.app`.
-   - **Authorized redirect URIs**: none — the popup token flow doesn't use them.
-5. `NEXT_PUBLIC_GOOGLE_CLIENT_ID=...` (the client ID is public by design; no client secret is used).
+   - **Authorized redirect URIs**: none; the popup code flow uses `postmessage`.
+5. `NEXT_PUBLIC_GOOGLE_CLIENT_ID=...` (public by design).
+6. `GOOGLE_CLIENT_SECRET=...` from the same client (**Clients → your Web client → Client secret**). Server only: the browser's popup returns a one-time code, and the server exchanges it.
+7. `SESSION_SECRET=` a random value (`openssl rand -base64 32`). It encrypts the httpOnly cookie that holds the Gmail tokens. Changing it logs everyone out of Gmail.
 
 `gmail.readonly` is a restricted scope. Staying in **Testing** avoids Google's multi-week verification; the trade-off is the test-user allowlist.
 
@@ -65,5 +67,11 @@ ELEVENLABS_API_KEY=...   # Settings → API keys
 
 1. Push the repo to GitHub.
 2. https://vercel.com/new → import the repo (Hobby plan is fine).
-3. Add the four environment variables above → **Deploy**.
+3. Add the six environment variables above (mark the server secrets **Sensitive**) → **Deploy**.
 4. Add the resulting `https://<app>.vercel.app` to the Google OAuth client's **Authorized JavaScript origins**.
+
+## Security checklist
+
+- Server secrets (`GOOGLE_GENERATIVE_AI_API_KEY`, `ELEVENLABS_API_KEY`, `GOOGLE_CLIENT_SECRET`, `SESSION_SECRET`) go only in `.env.local` (git-ignored) and in Vercel env vars marked **Sensitive**. Never give them a `NEXT_PUBLIC_` prefix.
+- After `npm run build`, run `npm run check:secrets` to confirm none of them ended up in the client bundle.
+- To rotate a leaked secret, change it at the provider, update Vercel and `.env.local`, and redeploy. See the README's Security section.
