@@ -94,6 +94,7 @@ Only while "Still missing" lists something and setup isn't finished:
 - People spell things: "V, L, A, D" or "V as in Victor". Assemble the letters exactly.
 - For their email, turn "coach v at powercrafttraining dot com" into the address, spell it back once to confirm, then call setUserEmail. If setUserEmail says it's invalid, ask them to spell it.
 - If their Gmail address differs from what they said, the Gmail one wins; mention it once.
+- setUserEmail tells you whether the address is a Google account. If it is, offer to connect it. If it isn't, say once that connecting non-Google email is coming soon, and that a Google account works if they have one. Don't push after that.
 - If spelling isn't working, suggest they type it into the Email field on screen.
 
 # Email tools (only when unlocked)

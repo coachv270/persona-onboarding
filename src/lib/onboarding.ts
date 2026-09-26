@@ -4,6 +4,7 @@
 // hang up — without losing anything.
 
 export type GmailStatus = "not_asked" | "offered" | "connected" | "declined";
+export type EmailProvider = "google" | "microsoft" | "other" | "unknown";
 export type CallStatus = "idle" | "connecting" | "active" | "ended";
 
 export interface GmailState {
@@ -19,6 +20,8 @@ export interface OnboardingState {
   userEmail: string | null;
   // "google" wins over anything typed or spoken.
   userEmailSource?: "user" | "google";
+  // Where that address's mail is hosted (MX lookup); only Google can be connected today.
+  userEmailProvider?: EmailProvider;
   helpNeed: string | null;
   gmail: GmailState;
   call: {
@@ -43,7 +46,7 @@ export const initialState: OnboardingState = {
 export type Action =
   | { type: "setAgentName"; value: string }
   | { type: "setUserName"; value: string }
-  | { type: "setUserEmail"; value: string; source: "user" | "google" }
+  | { type: "setUserEmail"; value: string; source: "user" | "google"; provider?: EmailProvider }
   | { type: "setHelpNeed"; value: string }
   | { type: "gmail"; value: Partial<GmailState> }
   | { type: "callConnecting" }
@@ -61,7 +64,12 @@ export function reducer(state: OnboardingState, action: Action): OnboardingState
     case "setUserEmail":
       // A typed/spoken address never overrides the connected Google account.
       if (state.userEmailSource === "google" && action.source === "user") return state;
-      return { ...state, userEmail: action.value, userEmailSource: action.source };
+      return {
+        ...state,
+        userEmail: action.value,
+        userEmailSource: action.source,
+        userEmailProvider: action.source === "google" ? "google" : action.provider,
+      };
     case "setHelpNeed":
       return { ...state, helpNeed: action.value.trim() };
     case "gmail":
@@ -86,8 +94,9 @@ export function missingSlots(s: OnboardingState): Slot[] {
   if (!s.agentName) missing.push("agentName");
   if (!s.userName) missing.push("userName");
   if (!s.userEmail) missing.push("userEmail");
-  // A declined Gmail counts as resolved — we don't nag, but may re-offer once.
-  if (s.gmail.status !== "connected" && s.gmail.status !== "declined") missing.push("gmail");
+  // Declined, or a non-Google address (connecting it is coming soon), counts as
+  // resolved: we don't nag, but may re-offer once.
+  if (s.gmail.status !== "connected" && s.gmail.status !== "declined" && !isNonGoogle(s)) missing.push("gmail");
   if (!s.helpNeed) missing.push("helpNeed");
   return missing;
 }
@@ -98,7 +107,7 @@ export function describeState(s: OnboardingState): string {
   const lines = [
     `Agent name: ${s.agentName ?? "(not chosen yet)"}`,
     `User name: ${s.userName ?? "(unknown)"}`,
-    `Email: ${s.userEmail ? `${s.userEmail}${s.userEmailSource === "google" ? " (from their Google account)" : ""}` : "(unknown)"}`,
+    `Email: ${s.userEmail ? `${s.userEmail}${emailNote(s)}` : "(unknown)"}`,
     `Gmail: ${
       s.gmail.status === "connected"
         ? `connected (${s.gmail.email ?? "address unknown"})`
@@ -116,6 +125,24 @@ export function describeState(s: OnboardingState): string {
   if (s.graduated) lines.push("Setup: finished or skipped. Don't ask for missing profile details.");
   else lines.push(`Still missing: ${missing.length ? missing.join(", ") : "nothing, setup complete"}`);
   return lines.join("\n");
+}
+
+export const isNonGoogle = (s: OnboardingState) =>
+  s.userEmailProvider === "microsoft" || s.userEmailProvider === "other";
+
+function emailNote(s: OnboardingState): string {
+  if (s.userEmailSource === "google") return " (from their connected Google account)";
+  switch (s.userEmailProvider) {
+    case "google":
+      return " (a Google account: Connect Gmail works with it)";
+    case "microsoft":
+    case "other":
+      return " (not a Google account: connecting non-Google email is coming soon)";
+    case "unknown":
+      return " (couldn't tell if it's a Google account)";
+    default:
+      return "";
+  }
 }
 
 // Pure format check. Turning speech ("coach v at …") into an address is the
@@ -136,7 +163,9 @@ export function mailAccess(s: OnboardingState, hasToken: boolean): MailAccess {
 export function describeCapabilities(s: OnboardingState, hasToken: boolean): string {
   const mail = {
     unlocked: "UNLOCKED. Use the mail tools now.",
-    locked: "LOCKED. Gmail isn't connected. Offer the Connect Gmail button; the user clicks it in their browser.",
+    locked: isNonGoogle(s)
+      ? "LOCKED. Their email isn't a Google account, and connecting non-Google email is coming soon. Say that once. If they also have a Google account, they can connect it with the Connect Gmail button."
+      : "LOCKED. Gmail isn't connected. Offer the Connect Gmail button; the user clicks it in their browser.",
     expired: "NEEDS RECONNECT. Gmail was connected, but this browser session's access expired. Running a mail tool shows a Reconnect button.",
   }[mailAccess(s, hasToken)];
   return [

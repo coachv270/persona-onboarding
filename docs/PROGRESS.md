@@ -50,8 +50,9 @@ Persona trial assignment, now one universal assistant with progressive unlock:
 
 - [x] All Gmail calls moved server-side; the browser never holds a Google token.
 - [x] Route guards (origin / Fetch Metadata), `server-only` modules, `npm run check:secrets`.
-- [x] Production **paused** on Vercel (503) until this ships.
-- [ ] Add `GOOGLE_CLIENT_SECRET` + `SESSION_SECRET` to `.env.local` and Vercel (Sensitive), test connect → summarize → Save to Drafts → Disconnect, merge, then resume the project.
+- [x] Shipped (PR #2): secrets on Vercel, project resumed, live checks passed.
+- [x] Connect → summarize → Save to Drafts → Disconnect verified on localhost.
+- [x] Email provider detection: Google (incl. Workspace via MX) can connect; others get "coming soon".
 
 ## Remaining
 

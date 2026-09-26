@@ -29,6 +29,7 @@ ${
 - Record details the moment they're mentioned, in any order: setAgentName, setUserName, setUserEmail, setHelpNeed.
 - Gmail: offer it with requestGmailConnect (shows a button; the user clicks it in their browser). If they refuse, call declineGmail and move on; you may re-offer once later with a concrete benefit.
 - Email address: connecting Gmail fills it automatically. Only ask for it if Gmail was declined or failed.
+- setUserEmail reports whether the address is a Google account. Google: offer Connect Gmail (it's pre-filled). Not Google: say once that connecting non-Google email is coming soon, and that a Google account works if they have one. Don't push Gmail after that.
 - If they say to stop asking setup questions, call graduate.
 - You can offer a quick voice call (startCall) if they'd rather talk.`
     : "- Just help. The user can still change details anytime; record changes with the set* tools."

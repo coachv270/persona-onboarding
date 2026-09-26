@@ -11,6 +11,7 @@ Live: https://persona-onboarding-phi.vercel.app · Status: [docs/PROGRESS.md](do
 - **One state object** (`src/lib/onboarding.ts`) is shared by chat, voice and the fields, and saved in `localStorage`. No database, no user accounts.
 - **One implementation per tool:** `runTool()` in `Onboarding.tsx`, used by chat tool calls and voice client tools alike. Mail tools call `POST /api/mail`.
 - **Progressive unlock:** a request is never blocked on setup. Mail tools work once Gmail is connected; otherwise the assistant says what unlocks them.
+- **Email capture:** typed, texted or spoken (spelled) addresses are validated in code, and the server checks whether it's a Google account (MX lookup). Google → Connect Gmail (pre-filled). Other providers → "connecting non-Google email is coming soon".
 - **Never sends email.** Drafts are shown for Copy or **Save to Gmail Drafts** (`gmail.compose` is requested only on that click).
 - **Debugging:** the red **Dev** button shows a timestamped log (including server-side Gmail steps) and the server session: account, scopes, and access-token expiry, with Force refresh and Disconnect.
 
@@ -85,13 +86,14 @@ npm run dev                  # http://localhost:3000
 | `src/lib/prompts.ts` | Chat prompt, voice `known_info`, adaptive voice greeting |
 | `src/lib/tools.ts` | Chat tool schemas (same names as the voice tools) |
 | `src/lib/gmail.ts` | Browser: Google popup (code only), calls to `/api/gmail/*` and `/api/mail` |
+| `src/lib/emailProvider.ts`, `src/app/api/email-provider` | Is an address a Google account? (gmail.com or Google-hosted MX, so Workspace domains count). Non-Google: "coming soon" |
 | `src/lib/mailTypes.ts` | Types shared by browser and server (`MailResult`, `Draft`, `GmailStatus`) |
 | `src/lib/server/session.ts` | Encrypted httpOnly session cookie |
 | `src/lib/server/google.ts` | Code exchange, token refresh, revoke |
 | `src/lib/server/gmailApi.ts` | Rate-limited Gmail API: search, read, create draft |
 | `src/lib/server/mailCommands.ts` | summarize, find, read, draft, save → text for the LLM; inbox ideas |
 | `src/lib/server/guard.ts` | Same-origin check for API routes |
-| `src/app/api/*` | `chat`, `mail`, `gmail/{connect,status,disconnect,expire}`, `insights`, `voice-token` |
+| `src/app/api/*` | `chat`, `mail`, `gmail/{connect,status,disconnect,expire}`, `insights`, `email-provider`, `voice-token` |
 | `docs/VOICE_AGENT.md` | Voice prompt (source of truth) and agent config |
 | `scripts/*.mjs` | `sync:voice` (push voice prompt), `check:secrets` (bundle scan) |
 
