@@ -180,6 +180,7 @@ interface RawPart {
 interface RawMessage {
   id: string;
   threadId: string;
+  labelIds?: string[];
   snippet?: string;
   payload?: RawPart;
 }
@@ -194,7 +195,28 @@ export interface MailItem {
   subject: string;
   date: string;
   snippet: string;
+  // Human tags from Gmail labels: unread, archived, promotions, social, updates…
+  tags: string[];
 }
+
+const LABEL_TAGS: Record<string, string> = {
+  UNREAD: "unread",
+  CATEGORY_PROMOTIONS: "promotions",
+  CATEGORY_SOCIAL: "social",
+  CATEGORY_UPDATES: "updates",
+  CATEGORY_FORUMS: "forums",
+  IMPORTANT: "important",
+};
+
+function tagsFor(labelIds: string[] = []): string[] {
+  const tags = labelIds.map((l) => LABEL_TAGS[l]).filter(Boolean);
+  if (!labelIds.includes("INBOX")) tags.push("archived");
+  return tags;
+}
+
+// Everything the user received: archived and read included; not spam, trash,
+// their own sent mail or drafts.
+export const ALL_RECEIVED = "-in:spam -in:trash -in:sent -in:drafts";
 
 export async function getProfileEmail(token: string): Promise<string> {
   return (await gmailFetch<{ emailAddress: string }>(token, "profile")).emailAddress;
@@ -231,6 +253,7 @@ export async function searchMessages(
       subject: header(m, "Subject"),
       date: header(m, "Date"),
       snippet: m.snippet ?? "",
+      tags: tagsFor(m.labelIds),
     }));
   devlog("gmail", `Fetched ${items.length}/${ids.length} message headers`);
   return { items, estimate: list.resultSizeEstimate ?? items.length };
@@ -282,6 +305,7 @@ export async function getMessage(token: string, id: string, maxChars: number): P
     subject: header(m, "Subject"),
     date: header(m, "Date"),
     snippet: m.snippet ?? "",
+    tags: tagsFor(m.labelIds),
     messageId: header(m, "Message-ID"),
     references: header(m, "References"),
     body,
@@ -345,6 +369,6 @@ export interface MailSummary {
 
 export async function fetchRecentMail(token: string, max = 25): Promise<MailSummary> {
   const email = await getProfileEmail(token);
-  const { items } = await searchMessages(token, "in:inbox -category:promotions -category:social newer_than:30d", max);
+  const { items } = await searchMessages(token, `${ALL_RECEIVED} -category:promotions -category:social newer_than:30d`, max);
   return { email, messages: items.map(({ from, subject }) => ({ from, subject })) };
 }

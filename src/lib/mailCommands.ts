@@ -3,7 +3,7 @@
 // for the LLM plus optional UI side effects for the caller to apply.
 
 import { devlog } from "./devlog";
-import { GmailAuthError, getCachedToken, getMessage, READONLY, searchMessages, type Draft, type MailItem } from "./gmail";
+import { ALL_RECEIVED, GmailAuthError, getCachedToken, getMessage, READONLY, searchMessages, type Draft, type MailItem } from "./gmail";
 
 export type Detail = "voice" | "text";
 
@@ -20,9 +20,9 @@ export interface MailContext {
 }
 
 const LOCKED =
-  "Gmail isn't connected, so email help is locked. A Connect Gmail button is now showing — offer it in one sentence (read-only; nothing is ever sent).";
+  "Gmail isn't connected, so email help is locked. A Connect Gmail button is now showing. Offer it in one sentence (read-only, nothing is ever sent).";
 const EXPIRED =
-  "Gmail access expired for this browser session. A Reconnect button is now showing — ask them to click it, then try again.";
+  "Gmail access expired for this browser session. A Reconnect button is now showing. Ask them to click it, then try again.";
 
 async function withGmail(ctx: MailContext, name: string, fn: (token: string) => Promise<MailResult>): Promise<MailResult> {
   if (!ctx.gmailConnected) {
@@ -54,7 +54,8 @@ function formatItems(items: MailItem[], detail: Detail): string {
     .map((m, i) => {
       const from = m.from.replace(/<[^>]+>/, "").trim() || m.from;
       const snippet = detail === "voice" ? m.snippet.slice(0, 120) : m.snippet;
-      return `${i + 1}. [id ${m.id}] ${from} · ${m.subject || "(no subject)"} · ${m.date}${snippet ? ` — ${snippet}` : ""}`;
+      const tags = m.tags.length ? ` [${m.tags.join(", ")}]` : "";
+      return `${i + 1}. [id ${m.id}] ${from} · ${m.subject || "(no subject)"} · ${m.date}${tags}${snippet ? `: ${snippet}` : ""}`;
     })
     .join("\n");
 }
@@ -68,15 +69,16 @@ export function summarizePeriod(args: { after: string; before?: string }, ctx: M
     if (after === null || (args.before && before === null)) {
       return { text: `Invalid date(s): after="${args.after}" before="${args.before ?? ""}". Use ISO 8601, e.g. 2026-09-25T00:00:00-07:00.` };
     }
-    const q = `in:inbox -category:promotions -category:social after:${after}${before ? ` before:${before}` : ""}`;
+    // All received mail, archived and read included; categories are tagged, not hidden.
+    const q = `${ALL_RECEIVED} after:${after}${before ? ` before:${before}` : ""}`;
     const { items, estimate } = await searchMessages(token, q, 30);
     devlog("gmail", `summarizeInbox ${args.after} → ${args.before ?? "now"}: ${items.length} emails (~${estimate})`);
-    if (!items.length) return { text: "No emails in that period (excluding promotions and social)." };
+    if (!items.length) return { text: "No emails received in that period (searched all mail, including archived)." };
     return {
       text:
         `${items.length} emails${estimate > items.length ? ` (showing the latest ${items.length} of ~${estimate})` : ""}:\n` +
         `${formatItems(items, ctx.detail)}\n\n` +
-        `Summarize for the user: group by theme, call out anything that needs a reply or action. ` +
+        `Summarize for the user: group by theme, call out anything that needs a reply or action, and mention promotions/newsletters only briefly. ` +
         (ctx.detail === "voice" ? VOICE_HINT : "Keep it scannable."),
     };
   });
@@ -124,7 +126,7 @@ export function prepareDraft(args: { messageId: string; body: string }, ctx: Mai
     devlog("gmail", `showDraft for ${args.messageId}: reply to ${draft.to.replace(/.*</, "<")}`);
     return {
       draft,
-      text: "The draft is on screen. Tell them they can edit it, copy it, or save it to Gmail Drafts. It is NOT sent — never say it was.",
+      text: "The draft is on screen. Tell them they can edit it, copy it, or save it to Gmail Drafts. It is NOT sent, so never say it was.",
     };
   });
 }

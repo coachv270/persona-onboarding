@@ -18,6 +18,7 @@ interface Props {
   autoStart: boolean;
   // Shared tool implementation (same as the chat's).
   runTool: (name: string, input: Record<string, unknown>, detail: "voice" | "text") => Promise<string>;
+  onConnected: () => void;
   onTranscript: (role: "user" | "agent", text: string) => void;
   onEnded: (reason: string) => void;
   onDecline: () => void;
@@ -53,7 +54,7 @@ async function fetchToken(): Promise<string> {
   return body.token;
 }
 
-export function VoiceCall({ state, dispatch, hasToken, autoStart, runTool, onTranscript, onEnded, onDecline, children }: Props) {
+export function VoiceCall({ state, dispatch, hasToken, autoStart, runTool, onConnected, onTranscript, onEnded, onDecline, children }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [lines, setLines] = useState<Line[]>([]);
   const [connectedAt, setConnectedAt] = useState<number | null>(null);
@@ -77,13 +78,14 @@ export function VoiceCall({ state, dispatch, hasToken, autoStart, runTool, onTra
       devlog("voice", "Connected", { conversationId });
       setConnectedAt(Date.now());
       dispatch({ type: "callActive" });
+      onConnected();
     },
     onDisconnect: (details) => {
       devlog("voice", `Disconnected (${details.reason})`, details);
       finish(describeDisconnect(details));
     },
     onMessage: ({ role, message }) => {
-      devlog("voice", `${role === "user" ? "user" : (stateRef.current.agentName ?? "agent")}: ${message}`);
+      devlog("voice", `🎙 ${role === "user" ? "user" : (stateRef.current.agentName ?? "agent")} (spoken): ${message}`);
       setLines((prev) => [...prev.slice(-2), { role, text: message }]);
       onTranscript(role, message);
     },
@@ -186,27 +188,27 @@ export function VoiceCall({ state, dispatch, hasToken, autoStart, runTool, onTra
   }
 
   return (
-    <div className="h-full w-full py-6 flex flex-col items-center gap-6 text-center">
+    <div className="h-full w-full py-4 lg:py-6 flex flex-col items-center gap-4 lg:gap-6 text-center overflow-y-auto">
       <div className="flex-1 w-full flex flex-col items-center justify-center gap-5">
         <div
-          className={`size-28 rounded-full flex items-center justify-center text-4xl font-semibold transition-all duration-300 ${
+          className={`size-28 rounded-full flex items-center justify-center display text-4xl transition-all duration-300 ${
             conversation.isSpeaking
-              ? "bg-emerald-500/30 ring-8 ring-emerald-500/15 scale-105"
+              ? "bg-imgreen/20 ring-8 ring-imgreen/10 scale-105"
               : live
-                ? "bg-emerald-500/15"
-                : "bg-black/5 dark:bg-white/10 animate-pulse"
+                ? "bg-surface border border-hairline"
+                : "bg-surface border border-hairline animate-pulse"
           }`}
         >
           {state.agentName ? state.agentName.charAt(0).toUpperCase() : "✦"}
         </div>
         <div>
-          <p className="text-2xl font-semibold">{agentName}</p>
-          <p className="text-sm opacity-60 tabular-nums">{status}</p>
+          <p className="display text-[28px]">{agentName}</p>
+          <p className="text-sm text-muted tabular-nums">{status}</p>
         </div>
 
         <div className="min-h-24 w-full flex flex-col justify-end gap-1.5 text-sm" aria-live="polite">
           {lines.map((l, i) => (
-            <p key={i} className={l.role === "user" ? "opacity-50" : ""}>
+            <p key={i} className={l.role === "user" ? "text-muted" : ""}>
               {l.role === "user" ? "You: " : ""}
               {l.text}
             </p>
@@ -225,10 +227,10 @@ export function VoiceCall({ state, dispatch, hasToken, autoStart, runTool, onTra
         </button>
       ) : (
         <div className="flex gap-3">
-          <button onClick={onDecline} className="rounded-full border border-black/15 dark:border-white/20 px-5 py-3">
+          <button onClick={onDecline} className="pill px-5 py-3">
             Keep texting
           </button>
-          <button onClick={answer} className="rounded-full bg-emerald-600 text-white px-8 py-3 font-medium">
+          <button onClick={answer} className="rounded-full bg-imgreen text-white px-8 py-3 font-medium">
             Answer
           </button>
         </div>

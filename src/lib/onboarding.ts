@@ -113,8 +113,8 @@ export function describeState(s: OnboardingState): string {
     lines.push(`The last voice call ended (${s.call.lastEndReason}).`);
   }
   const missing = missingSlots(s);
-  if (s.graduated) lines.push("Setup: finished or skipped — don't ask for missing profile details.");
-  else lines.push(`Still missing: ${missing.length ? missing.join(", ") : "nothing — setup complete"}`);
+  if (s.graduated) lines.push("Setup: finished or skipped. Don't ask for missing profile details.");
+  else lines.push(`Still missing: ${missing.length ? missing.join(", ") : "nothing, setup complete"}`);
   return lines.join("\n");
 }
 
@@ -135,12 +135,12 @@ export function mailAccess(s: OnboardingState, hasToken: boolean): MailAccess {
 
 export function describeCapabilities(s: OnboardingState, hasToken: boolean): string {
   const mail = {
-    unlocked: "UNLOCKED — use the mail tools now.",
-    locked: "LOCKED — Gmail isn't connected. Offer the Connect Gmail button; the user clicks it in their browser.",
-    expired: "NEEDS RECONNECT — Gmail was connected, but this browser session's access expired. Running a mail tool shows a Reconnect button.",
+    unlocked: "UNLOCKED. Use the mail tools now.",
+    locked: "LOCKED. Gmail isn't connected. Offer the Connect Gmail button; the user clicks it in their browser.",
+    expired: "NEEDS RECONNECT. Gmail was connected, but this browser session's access expired. Running a mail tool shows a Reconnect button.",
   }[mailAccess(s, hasToken)];
   return [
-    `Email help (summarize a period, find or read an email, draft a reply — never sent): ${mail}`,
+    `Email help (summarize a period, find or read an email, draft a reply, never sent): ${mail}`,
     "Always available: conversation, remembering profile details.",
   ].join("\n");
 }

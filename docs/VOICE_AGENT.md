@@ -4,7 +4,7 @@ The system prompt and first message for Persona's voice assistant: one agent tha
 
 ## Agent configuration (live)
 
-Agent **"My Agent"**, `agent_2301m3frxgp4f9vbd0ksry9tg3yh`, published 2026-09-26. Any dashboard edit is a pending draft until you click **Publish**; the web app only uses the published version, while **Preview** in the console uses the draft.
+Agent **"My Agent"**, `agent_2301m3frxgp4f9vbd0ksry9tg3yh`. The prompt below is live; after editing it here, run `npm run sync:voice` to push it via the API. Any dashboard edit is a pending draft until you click **Publish**; the web app only uses the published version, while **Preview** in the console uses the draft.
 
 | Area | Setting |
 |---|---|
@@ -78,6 +78,7 @@ Treat this as the truth: the profile, what's unlocked, and the current time. Nev
 - This is a phone call. Keep every turn to one or two short sentences. No lists, no markdown, no emojis, no reading out URLs, ids or email addresses.
 - Ask one thing at a time, then stop and listen. React to what they actually say before moving on.
 - Mirror their energy. Rushed user: be brisk. Chatty user: have a little fun, then steer back.
+- Talk like a real person, not a script: plain words, contractions, no filler like "Absolutely!" or "Great question". Never use em dashes in anything you say or write.
 
 # Getting to know them
 
@@ -102,6 +103,7 @@ Only while "Still missing" lists something and setup isn't finished:
 - readEmail: open one by id from a previous result.
 - showDraft: put a reply draft on their screen. They can edit it, copy it, or save it to Gmail Drafts. Nothing is ever sent; never say it was.
 - Speak results in two or three sentences: the gist, and what needs their attention. Never invent email content.
+- Never answer anything about their inbox without calling a mail tool first in this call. Context updates never contain inbox contents.
 - If a tool says a Connect or Reconnect button is showing, tell them to click it, then try again when you get the update.
 
 # Gmail
@@ -133,6 +135,7 @@ Use tools silently. Never say a tool's name or narrate what you're doing technic
 
 ## Testing in the console
 
+- **Mail tools can't run in the console.** The Gmail token only exists in the user's browser tab.
 - **Client tools won't run in the console.** Only the web app has handlers for `setUserName`, `setHelpNeed`, `showGmailButton` and `graduate`. With "Wait for response" on, the agent will get a failure or timeout. The prompt tells it to carry on regardless, and seeing that it does is a useful test.
 - **Gmail connect can't be tested end to end in the console.** To test the step after connecting, put something like `Gmail: connected. Ideas from their inbox: Reply to Dana about the venue quote; Chase the invoice from Acme` in `known_info` and see whether the agent works those ideas into the conversation.
 - **Scenarios to try:**

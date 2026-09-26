@@ -35,9 +35,9 @@ export function DevPanel() {
     <>
       <button
         onClick={() => setOpen((o) => !o)}
-        className="fixed top-3 right-3 z-50 rounded-full border border-black/15 dark:border-white/20 bg-background px-3 py-1 text-xs font-mono shadow-sm"
+        className="fixed top-2.5 right-3 z-50 rounded-full bg-red-600 text-white px-3 py-1 text-xs font-mono shadow-sm hover:bg-red-700"
       >
-        Dev{errors > 0 && <span className="ml-1 text-red-600">● {errors}</span>}
+        Dev{errors > 0 && <span className="ml-1 rounded-full bg-white text-red-600 px-1.5">{errors}</span>}
       </button>
 
       {open && (

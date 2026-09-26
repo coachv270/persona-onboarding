@@ -132,7 +132,7 @@ export function Onboarding({
     const str = (k: string) => String(input[k] ?? "").trim();
     const ctx = { gmailConnected: stateRef.current.gmail.status === "connected", detail };
     const setText = (type: "setAgentName" | "setUserName" | "setHelpNeed", key: string) =>
-      str(key) ? apply({ type, value: str(key) }) : "Empty value — ask again.";
+      str(key) ? apply({ type, value: str(key) }) : "Empty value, ask again.";
 
     switch (name) {
       case "setAgentName":
@@ -169,7 +169,7 @@ export function Onboarding({
         return "The incoming-call screen is showing; the user can answer or keep texting.";
       case "graduate":
         apply({ type: "graduate" });
-        return "Noted — no more setup questions. Keep helping.";
+        return "Noted, no more setup questions. Keep helping.";
       case "summarizeInbox":
         return handleMail(await summarizePeriod({ after: str("after"), before: str("before") || undefined }, ctx));
       case "findEmails":
@@ -195,6 +195,10 @@ export function Onboarding({
           hasGmailToken: !!getCachedToken(),
           now: new Date().toString(),
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        }),
+        // Call dividers are display-only; keep them out of the model's history.
+        prepareSendMessagesRequest: ({ id, messages, body, trigger, messageId }) => ({
+          body: { ...body, id, trigger, messageId, messages: messages.filter((m) => !m.metadata?.divider) },
         }),
       }),
     [],
@@ -272,8 +276,28 @@ export function Onboarding({
       },
     ]);
 
+  // Voice exchanges are marked in the transcript: a divider when the call
+  // connects and when it ends, and a "voice" tag on every spoken line.
+  const callStartedAt = useRef<number | null>(null);
+  const appendDivider = (text: string) =>
+    setMessages((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), role: "assistant", parts: [{ type: "text", text }], metadata: { divider: true } },
+    ]);
+
+  const onCallConnected = () => {
+    callStartedAt.current = Date.now();
+    const at = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    appendDivider(`📞 Voice call with ${stateRef.current.agentName ?? "your assistant"} · ${at}`);
+  };
+
   const onCallEnded = (reason: string) => {
     setCall(null);
+    if (callStartedAt.current) {
+      const secs = Math.round((Date.now() - callStartedAt.current) / 1000);
+      appendDivider(`Call ended · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")} · ${reason}`);
+      callStartedAt.current = null;
+    }
     sendEvent(`The voice call ended: ${reason}. Continue here in text.`);
   };
 
@@ -310,7 +334,7 @@ export function Onboarding({
       devlog("gmail", `Authorized ${email}`);
       const mismatch =
         before.userEmail && before.userEmail !== email
-          ? ` They'd given ${before.userEmail}; their Gmail is ${email} — say (once) you'll use that.`
+          ? ` They'd given ${before.userEmail}; their Gmail is ${email}. Say (once) you'll use that.`
           : "";
       apply({ type: "setUserEmail", value: email, source: "google" });
 
@@ -337,7 +361,7 @@ export function Onboarding({
       devlog("gmail", `Inbox ideas: ${insights.length}`, insights);
       apply({ type: "gmail", value: { status: "connected", email, insights } });
       notifyAgents(
-        `Gmail connected (${email}) — email help is now unlocked.` +
+        `Gmail connected (${email}). Email help is now unlocked.` +
           (insights.length ? ` Ideas from their inbox: ${insights.join("; ")}` : "") +
           mismatch,
         { chat: true },
@@ -413,95 +437,112 @@ export function Onboarding({
   ));
 
   return (
-    <div className="mx-auto w-full max-w-5xl min-h-dvh md:h-dvh px-4 py-4 md:py-6 grid gap-4 md:gap-6 md:grid-cols-[300px_1fr]">
-      <aside className="flex flex-col gap-4 md:overflow-y-auto">
-        <ProfileCard
-          state={state}
-          hasToken={hasToken}
-          gmailBusy={gmailBusy}
-          gmailError={gmailError}
-          onEdit={editField}
-          onConnectGmail={connectGmail}
-        />
-        <HelpActions access={access} inCall={inCall} onAsk={askAssistant} onPrefill={prefill} />
-        <HowItWorks />
-        <button onClick={onReset} className="self-start text-xs opacity-50 hover:opacity-100">
-          Start over
-        </button>
-      </aside>
+    <div className="h-dvh flex flex-col">
+      <header className="shrink-0 px-4 lg:px-5 py-2.5 lg:py-3 flex items-center gap-2">
+        <span className="size-6 rounded-full border border-foreground/80 flex items-center justify-center text-[11px] font-semibold">P</span>
+        <span className="display text-[17px]">Persona</span>
+      </header>
 
-      <section className="flex flex-col min-h-[70dvh] md:min-h-0 rounded-3xl border border-black/10 dark:border-white/15 px-4">
-        {callOpen ? (
-          <VoiceCall
+      <div className="flex-1 min-h-0 mx-auto w-full max-w-7xl px-3 lg:px-4 pb-3 lg:pb-4 grid gap-3 lg:gap-6 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] lg:grid-rows-1 lg:grid-cols-[280px_minmax(0,1fr)_280px]">
+        <aside className="flex flex-col gap-3 min-h-0 max-h-[55dvh] lg:max-h-none overflow-y-auto">
+          <ProfileCard
             state={state}
-            dispatch={dispatch}
             hasToken={hasToken}
-            autoStart={call !== "ring"}
-            runTool={runTool}
-            onTranscript={appendVoiceTranscript}
-            onEnded={onCallEnded}
-            onDecline={() => {
-              setCall(null);
-              sendEvent("The user chose to keep texting instead of taking the call.");
-            }}
-          >
-            {gmailCard}
-            {draftCards.at(-1)}
-          </VoiceCall>
-        ) : (
-          <>
-            <main className="flex-1 overflow-y-auto flex flex-col gap-3 py-4">
-              {visibleMessages.length === 0 && drafts.length === 0 ? (
-                <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center px-4">
-                  <Avatar name={state.agentName} />
-                  <h1 className="text-2xl font-semibold">
-                    {state.agentName ? `Say hi to ${state.agentName}` : "Meet your new assistant"}
-                  </h1>
-                  <p className="opacity-60 max-w-sm">
-                    Ask for help, hop on a quick call, or fill in the details on the left — whatever&apos;s easiest.
-                  </p>
-                  <button
-                    onClick={() => setCall("dial")}
-                    className="rounded-full bg-emerald-600 text-white px-8 py-3 font-medium hover:bg-emerald-700"
-                  >
-                    📞 {state.agentName ? `Call ${state.agentName}` : "Start a call"}
-                  </button>
-                </div>
-              ) : (
-                visibleMessages.map((m) => <Message key={m.id} message={m} />)
-              )}
-              {status === "submitted" && <p className="text-sm opacity-50">…</p>}
-              {error && <p className="text-sm text-red-600">Something went wrong: {error.message}</p>}
-              {draftCards}
-              {gmailCard}
-              <div ref={bottomRef} />
-            </main>
+            gmailBusy={gmailBusy}
+            gmailError={gmailError}
+            onEdit={editField}
+            onConnectGmail={connectGmail}
+          />
+          <button onClick={onReset} className="hidden lg:block self-start px-1 text-xs text-muted hover:text-foreground">
+            Start over
+          </button>
+        </aside>
 
-            <form onSubmit={submit} className="py-4 flex gap-2">
-              <input
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder={`Message ${agent}…`}
-                className="flex-1 min-w-0 rounded-full border border-black/15 dark:border-white/20 bg-transparent px-4 py-2 outline-none"
-              />
-              {visibleMessages.length > 0 && (
+        <section className="flex flex-col min-h-0 rounded-[28px] border border-hairline bg-background shadow-[0_1px_3px_rgba(0,0,0,0.04)] px-4">
+          {callOpen ? (
+            <VoiceCall
+              state={state}
+              dispatch={dispatch}
+              hasToken={hasToken}
+              autoStart={call !== "ring"}
+              runTool={runTool}
+              onConnected={onCallConnected}
+              onTranscript={appendVoiceTranscript}
+              onEnded={onCallEnded}
+              onDecline={() => {
+                setCall(null);
+                sendEvent("The user chose to keep texting instead of taking the call.");
+              }}
+            >
+              {gmailCard}
+              {draftCards.at(-1)}
+            </VoiceCall>
+          ) : (
+            <>
+              <main className="flex-1 overflow-y-auto flex flex-col gap-2 py-4">
+                {visibleMessages.length === 0 && drafts.length === 0 ? (
+                  <div className="flex-1 flex flex-col items-center justify-center gap-5 text-center px-4">
+                    <Avatar name={state.agentName} />
+                    <h1 className="display text-[40px] leading-[1.05] sm:text-[48px]">
+                      {state.agentName ? (
+                        <>Say hi to {state.agentName}</>
+                      ) : (
+                        <>
+                          Your personal
+                          <br />
+                          intelligence
+                        </>
+                      )}
+                    </h1>
+                    <p className="text-muted max-w-sm text-[15px]">
+                      Talk, text, or type, whatever&apos;s easiest. Ask for help right away and it learns the rest as you go.
+                    </p>
+                    <button onClick={() => setCall("dial")} className="pill px-6 py-3 flex items-center gap-2.5 text-[16px] shadow-sm">
+                      <PhoneIcon />
+                      {state.agentName ? `Call ${state.agentName}` : "Start a call"}
+                    </button>
+                  </div>
+                ) : (
+                  visibleMessages.map((m) => <Message key={m.id} message={m} />)
+                )}
+                {status === "submitted" && <TypingDots />}
+                {error && <p className="text-sm text-red-600">Something went wrong: {error.message}</p>}
+                {draftCards}
+                {gmailCard}
+                <div ref={bottomRef} />
+              </main>
+
+              <QuickActions access={access} onAsk={askAssistant} onPrefill={prefill} />
+              <form onSubmit={submit} className="py-3 flex items-center gap-2 border-t border-hairline">
+                <input
+                  ref={inputRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder={`Message ${agent}`}
+                  className="flex-1 min-w-0 rounded-full border border-hairline bg-surface px-4 py-2.5 text-[15px] outline-none focus:border-imblue"
+                />
+                {visibleMessages.length > 0 && (
+                  <button type="button" onClick={() => setCall("dial")} className="pill size-10 flex items-center justify-center" title={`Call ${agent}`}>
+                    <PhoneIcon />
+                  </button>
+                )}
                 <button
-                  type="button"
-                  onClick={() => setCall("dial")}
-                  className="rounded-full border border-black/15 dark:border-white/20 px-3"
-                  title={`Call ${agent}`}
+                  disabled={busy || !input.trim()}
+                  aria-label="Send"
+                  className="size-10 rounded-full bg-imblue text-white flex items-center justify-center disabled:opacity-30"
                 >
-                  📞
+                  ↑
                 </button>
-              )}
-              <button disabled={busy} className="rounded-full bg-foreground text-background px-4 py-2 font-medium disabled:opacity-40">
-                Send
-              </button>
-            </form>
-          </>
-        )}
-      </section>
+              </form>
+            </>
+          )}
+        </section>
+
+        <aside className="hidden lg:flex flex-col gap-4 overflow-y-auto">
+          <HelpActions access={access} inCall={inCall} onAsk={askAssistant} onPrefill={prefill} />
+          <HowItWorks />
+        </aside>
+      </div>
     </div>
   );
 }
@@ -522,12 +563,24 @@ function ProfileCard({
   onConnectGmail: () => void;
 }) {
   const [emailError, setEmailError] = useState<string | null>(null);
+  // Mobile: a one-line summary that expands. Desktop: always open.
+  const [open, setOpen] = useState(false);
   const missing = missingSlots(state).length;
   const connected = state.gmail.status === "connected";
   return (
-    <div className="rounded-3xl border border-black/10 dark:border-white/15 p-4 flex flex-col gap-3">
+    <div className="rounded-[22px] lg:rounded-[28px] bg-surface p-3 lg:p-4 flex flex-col gap-3">
+      <button onClick={() => setOpen((o) => !o)} className="px-1 flex items-center justify-between text-left lg:pointer-events-none">
+        <span>
+          <span className="display text-[17px]">Your Persona</span>
+          <span className={`block text-xs ${missing === 0 ? "text-imgreen" : "text-muted"}`}>
+            {missing === 0 ? "✓ All set. Change anything, anytime." : `${missing} detail${missing === 1 ? "" : "s"} left, or just ask for help.`}
+          </span>
+        </span>
+        <span className="lg:hidden text-muted text-sm">{open ? "▴" : "▾"}</span>
+      </button>
+      <div className={`${open ? "flex" : "hidden"} lg:flex flex-col gap-3`}>
       <Field label="Assistant's name" value={state.agentName} placeholder="e.g. Nova" onCommit={(v) => onEdit("agentName", v)} />
-      <Field label="Your name" value={state.userName} placeholder="What should they call you?" onCommit={(v) => onEdit("userName", v)} />
+      <Field label="Your name" value={state.userName} placeholder="What should it call you?" onCommit={(v) => onEdit("userName", v)} />
       <Field
         label={state.userEmailSource === "google" ? "Email · from Google" : "Email"}
         value={state.userEmail}
@@ -545,35 +598,31 @@ function ProfileCard({
         onCommit={(v) => onEdit("helpNeed", v)}
       />
       <div className="flex flex-col gap-1">
-        <span className="text-xs font-medium opacity-60">Gmail</span>
+        <span className="px-1 text-xs text-muted">Gmail</span>
         {connected && hasToken ? (
-          <p key={state.gmail.email} className="flash text-sm rounded-xl px-3 py-2 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 truncate">
+          <p key={state.gmail.email} className="flash text-sm rounded-2xl px-3 py-2.5 bg-background text-imgreen">
             ✓ Connected
           </p>
         ) : (
           <button
             onClick={onConnectGmail}
             disabled={gmailBusy}
-            className={`text-sm rounded-xl px-3 py-2 text-left border transition-colors disabled:opacity-50 ${
-              state.gmail.status === "offered" || connected
-                ? "border-blue-500 bg-blue-500/10 text-blue-700 dark:text-blue-300"
-                : "border-black/10 dark:border-white/15 hover:border-blue-500"
+            className={`pill text-sm px-3 py-2.5 text-left disabled:opacity-50 ${
+              state.gmail.status === "offered" || connected ? "!border-imblue text-imblue" : ""
             }`}
           >
             {gmailBusy
               ? "Connecting…"
               : connected
-                ? "Reconnect Gmail (session expired)"
+                ? "Reconnect Gmail"
                 : state.gmail.status === "declined"
-                  ? "Skipped · connect anyway"
+                  ? "Skipped · Connect anyway"
                   : "Connect Gmail"}
           </button>
         )}
-        {gmailError && <p className="text-xs text-red-600">{gmailError}</p>}
+        {gmailError && <p className="px-1 text-xs text-red-600">{gmailError}</p>}
       </div>
-      <p className={`text-xs ${missing === 0 ? "text-emerald-700 dark:text-emerald-400" : "opacity-50"}`}>
-        {missing === 0 ? "✓ Setup complete" : `${missing} detail${missing === 1 ? "" : "s"} left — or just ask for help`}
-      </p>
+      </div>
     </div>
   );
 }
@@ -599,13 +648,13 @@ function Field({
   error?: string | null;
   onCommit: (value: string) => void;
 }) {
-  const className = `${value ? "flash" : ""} w-full rounded-xl border ${
-    error ? "border-red-500" : "border-black/10 dark:border-white/15"
-  } bg-transparent px-3 py-2 text-sm outline-none focus:border-blue-500 disabled:opacity-70`;
+  const className = `${value ? "flash" : ""} w-full rounded-2xl border ${
+    error ? "border-red-500" : "border-transparent"
+  } bg-background px-3 py-2.5 text-sm outline-none focus:border-imblue disabled:text-muted`;
   const commit = (e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => onCommit(e.currentTarget.value);
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-xs font-medium opacity-60">{label}</span>
+      <span className="px-1 text-xs text-muted">{label}</span>
       {multiline ? (
         <textarea key={value ?? ""} defaultValue={value ?? ""} placeholder={placeholder} rows={2} onBlur={commit} className={`${className} resize-none`} />
       ) : (
@@ -620,7 +669,7 @@ function Field({
           className={className}
         />
       )}
-      {error && <span className="text-xs text-red-600">{error}</span>}
+      {error && <span className="px-1 text-xs text-red-600">{error}</span>}
     </label>
   );
 }
@@ -647,11 +696,15 @@ function HelpActions({
 }) {
   const locked = access !== "unlocked";
   return (
-    <div className="flex flex-col gap-2 px-1">
-      <div className="flex items-baseline justify-between">
-        <p className="text-xs font-medium">What I can do</p>
-        <p className="text-[11px] opacity-50">
-          {access === "unlocked" ? "Email help unlocked" : access === "expired" ? "🔒 Reconnect Gmail" : "🔒 Connect Gmail to unlock"}
+    <div className="flex flex-col gap-2">
+      <div className="px-1">
+        <p className="display text-[17px]">Ready when you are.</p>
+        <p className="text-xs text-muted">
+          {access === "unlocked"
+            ? "Tap to ask, or just say it."
+            : access === "expired"
+              ? "Reconnect Gmail to pick up where you left off."
+              : "Connect Gmail to unlock email help."}
         </p>
       </div>
       <div className="flex flex-wrap gap-1.5">
@@ -663,31 +716,106 @@ function HelpActions({
               disabled={disabled}
               title={disabled ? "Say it on the call" : undefined}
               onClick={() => (a.send ? onAsk(a.send) : onPrefill(a.prefill!))}
-              className={`rounded-full border px-2.5 py-1 text-xs transition-colors disabled:opacity-40 ${
-                locked
-                  ? "border-black/10 dark:border-white/15 opacity-60 hover:opacity-100"
-                  : "border-emerald-500/40 hover:bg-emerald-500/10"
-              }`}
+              className={`pill text-xs px-3 py-1.5 disabled:opacity-40 ${locked ? "text-muted" : ""}`}
             >
-              {locked ? "🔒 " : ""}
+              {locked && <span className="mr-1">🔒</span>}
               {a.label}
             </button>
           );
         })}
       </div>
-      <p className="text-[11px] opacity-50">Drafts are never sent — you can copy them or save to Gmail Drafts.</p>
     </div>
   );
 }
 
+// Mobile: the same actions as one horizontally scrolling row above the input.
+function QuickActions({
+  access,
+  onAsk,
+  onPrefill,
+}: {
+  access: ReturnType<typeof mailAccess>;
+  onAsk: (text: string) => void;
+  onPrefill: (text: string) => void;
+}) {
+  const locked = access !== "unlocked";
+  return (
+    <div className="lg:hidden -mx-4 px-4 pb-2 flex gap-1.5 overflow-x-auto [scrollbar-width:none]">
+      {HELP_ACTIONS.map((a) => (
+        <button
+          key={a.label}
+          onClick={() => (a.send ? onAsk(a.send) : onPrefill(a.prefill!))}
+          className={`pill shrink-0 text-xs px-3 py-1.5 ${locked ? "text-muted" : ""}`}
+        >
+          {locked && "🔒 "}
+          {a.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Numbered steps in the order the user goes through them; UI labels highlighted.
+function Hl({ children }: { children: React.ReactNode }) {
+  return <span className="rounded bg-surface border border-hairline px-1 text-foreground font-medium whitespace-nowrap">{children}</span>;
+}
+
+const HOW_IT_WORKS: { title: string; body: React.ReactNode }[] = [
+  {
+    title: "Start however you like",
+    body: (
+      <>
+        Tap <Hl>📞 Start a call</Hl>, send a message, or fill in <Hl>Your Persona</Hl>. All three stay in sync.
+      </>
+    ),
+  },
+  {
+    title: "Ask for help right away",
+    body: <>No setup first. Your assistant picks up your name and what you need as you talk.</>,
+  },
+  {
+    title: "Connect Gmail to unlock email help",
+    body: (
+      <>
+        Click <Hl>Connect Gmail</Hl> and approve the Google popup. It can read, never send.
+      </>
+    ),
+  },
+  {
+    title: "Ask about your email",
+    body: <>Use the buttons above, or just ask: summarize a day, find or read an email, draft a reply.</>,
+  },
+  {
+    title: "Drafts stay drafts",
+    body: (
+      <>
+        Edit it, then <Hl>Copy</Hl> or <Hl>Save to Gmail Drafts</Hl>. Sending is always up to you.
+      </>
+    ),
+  },
+  {
+    title: "Hang up anytime",
+    body: <>The chat picks up right where the call left off.</>,
+  },
+];
+
 function HowItWorks() {
   return (
-    <div className="text-xs opacity-60 flex flex-col gap-1.5 px-1">
-      <p className="font-medium">How it works</p>
-      <p>Talk, type, or fill in the fields — all three work together and update live.</p>
-      <p>Ask for help anytime. Setup never blocks you; connecting Gmail unlocks email help.</p>
-      <p>Gmail connects via a Google popup. The assistant can read, summarize and draft — it never sends or deletes.</p>
-      <p>Hang up anytime — the chat picks up where the call left off.</p>
+    <div className="flex flex-col gap-2 px-1">
+      <p className="display text-[17px]">How it works</p>
+      <ol className="flex flex-col gap-2">
+        {HOW_IT_WORKS.map((step, i) => (
+          <li key={step.title} className="flex gap-2.5">
+            <span className="shrink-0 size-4 rounded-full bg-foreground text-background text-[10px] font-medium flex items-center justify-center mt-0.5">
+              {i + 1}
+            </span>
+            <div>
+              <p className="text-[13px] font-medium leading-tight">{step.title}</p>
+              <p className="text-[11px] text-muted leading-snug">{step.body}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }
@@ -706,18 +834,21 @@ function GmailCard({
   onDecline: () => void;
 }) {
   return (
-    <div className="w-full rounded-2xl border border-blue-500/40 bg-blue-500/5 p-4 flex flex-col gap-3 text-left">
-      <p className="text-sm">
-        {reconnect
-          ? "Gmail access expired for this session — reconnect to continue."
-          : "Connect Gmail so I can summarize, find and read your email and draft replies. I never send or delete anything."}
-      </p>
+    <div className="w-full rounded-3xl bg-surface p-4 flex flex-col gap-3 text-left">
+      <div>
+        <p className="text-sm font-medium">{reconnect ? "Pick up where you left off." : "Bring your inbox."}</p>
+        <p className="text-sm text-muted">
+          {reconnect
+            ? "Gmail access ends when the page reloads. Reconnect to continue."
+            : "Connect Gmail and I'll summarize, find and draft. I never send or delete anything."}
+        </p>
+      </div>
       <div className="flex gap-2">
-        <button onClick={onConnect} disabled={busy} className="rounded-full bg-blue-600 text-white px-4 py-2 text-sm font-medium disabled:opacity-50">
+        <button onClick={onConnect} disabled={busy} className="rounded-full bg-imblue text-white px-4 py-2 text-sm font-medium disabled:opacity-50">
           {busy ? "Connecting…" : reconnect ? "Reconnect Gmail" : "Connect Gmail"}
         </button>
         {!reconnect && (
-          <button onClick={onDecline} className="rounded-full px-4 py-2 text-sm opacity-60">
+          <button onClick={onDecline} className="rounded-full px-4 py-2 text-sm text-muted hover:text-foreground">
             Not now
           </button>
         )}
@@ -730,8 +861,12 @@ function GmailCard({
 function DraftCard({ draft, onChange, onSave }: { draft: DraftItem; onChange: (body: string) => void; onSave: () => void }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div className="w-full rounded-2xl border border-violet-500/40 bg-violet-500/5 p-4 flex flex-col gap-2 text-left text-sm">
-      <div className="text-xs opacity-70">
+    <div className="w-full rounded-3xl bg-surface p-4 flex flex-col gap-2 text-left text-sm">
+      <div className="flex items-baseline justify-between gap-2">
+        <p className="font-medium">Draft reply</p>
+        <p className="text-[11px] text-muted">Never sent</p>
+      </div>
+      <div className="text-xs text-muted">
         <p className="truncate">To: {draft.to}</p>
         <p className="truncate">Subject: {draft.subject}</p>
       </div>
@@ -739,7 +874,7 @@ function DraftCard({ draft, onChange, onSave }: { draft: DraftItem; onChange: (b
         value={draft.body}
         onChange={(e) => onChange(e.target.value)}
         rows={Math.min(10, draft.body.split("\n").length + 1)}
-        className="w-full rounded-xl border border-black/10 dark:border-white/15 bg-background px-3 py-2 outline-none focus:border-violet-500"
+        className="w-full rounded-2xl border border-transparent bg-background px-3 py-2 outline-none focus:border-imblue"
       />
       <div className="flex items-center gap-2">
         <button
@@ -747,27 +882,46 @@ function DraftCard({ draft, onChange, onSave }: { draft: DraftItem; onChange: (b
             void navigator.clipboard?.writeText(draft.body);
             setCopied(true);
           }}
-          className="rounded-full border border-black/15 dark:border-white/20 px-3 py-1.5 text-xs"
+          className="pill px-3 py-1.5 text-xs"
         >
           {copied ? "Copied ✓" : "Copy"}
         </button>
         <button
           onClick={onSave}
           disabled={draft.status === "saving" || draft.status === "saved"}
-          className="rounded-full bg-violet-600 text-white px-3 py-1.5 text-xs font-medium disabled:opacity-60"
+          className="rounded-full bg-foreground text-background px-3 py-1.5 text-xs font-medium disabled:opacity-60"
         >
           {draft.status === "saving" ? "Saving…" : draft.status === "saved" ? "Saved to Gmail Drafts ✓" : "Save to Gmail Drafts"}
         </button>
-        <span className="text-[11px] opacity-50">Never sent</span>
       </div>
       {draft.error && <p className="text-xs text-red-600">{draft.error}</p>}
     </div>
   );
 }
 
+function PhoneIcon() {
+  return (
+    <span className="size-6 rounded-md bg-imgreen text-white flex items-center justify-center">
+      <svg viewBox="0 0 24 24" className="size-3.5" fill="currentColor" aria-hidden>
+        <path d="M6.6 10.8a15.2 15.2 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.6a1 1 0 0 1-.25 1z" />
+      </svg>
+    </span>
+  );
+}
+
+function TypingDots() {
+  return (
+    <div className="self-start rounded-[20px] bg-bubble px-4 py-3 flex gap-1" aria-label="Typing">
+      {[0, 150, 300].map((d) => (
+        <span key={d} className="size-1.5 rounded-full bg-muted animate-bounce" style={{ animationDelay: `${d}ms` }} />
+      ))}
+    </div>
+  );
+}
+
 function Avatar({ name }: { name: string | null }) {
   return (
-    <div className="size-20 rounded-full bg-emerald-500/15 flex items-center justify-center text-3xl font-semibold">
+    <div className="size-20 rounded-full bg-surface border border-hairline flex items-center justify-center display text-3xl">
       {name ? name.charAt(0).toUpperCase() : "✦"}
     </div>
   );
@@ -781,19 +935,30 @@ function messageText(message: ChatMessage): string {
     .trim();
 }
 
+// iMessage-style bubbles. Spoken lines carry a "voice" tag; calls get dividers.
 function Message({ message }: { message: ChatMessage }) {
   const text = messageText(message);
+  if (message.metadata?.divider) {
+    return (
+      <div className="my-2 flex items-center gap-3 text-[11px] text-muted">
+        <span className="h-px flex-1 bg-hairline" />
+        {text}
+        <span className="h-px flex-1 bg-hairline" />
+      </div>
+    );
+  }
   const mine = message.role === "user";
+  const voice = message.metadata?.channel === "voice";
   return (
-    <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+    <div className={`flex flex-col ${mine ? "items-end" : "items-start"}`}>
       <div
-        className={`max-w-[85%] rounded-2xl px-4 py-2 whitespace-pre-wrap ${
-          mine ? "bg-blue-600 text-white" : "bg-black/5 dark:bg-white/10"
-        }`}
+        className={`max-w-[80%] rounded-[20px] px-4 py-2 text-[15px] leading-snug whitespace-pre-wrap ${
+          mine ? "bg-imblue text-white" : "bg-bubble text-foreground"
+        } ${voice ? "ring-1 ring-imgreen/60" : ""}`}
       >
-        {message.metadata?.channel === "voice" && <span className="mr-1 opacity-60">🎙️</span>}
         {text}
       </div>
+      {voice && <span className="px-2 pt-0.5 text-[10px] text-muted">🎙 voice</span>}
     </div>
   );
 }
