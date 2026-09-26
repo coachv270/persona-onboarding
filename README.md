@@ -16,3 +16,5 @@ npm run dev
 ```
 
 Account setup (Google Cloud, ElevenLabs agent, Vercel): [docs/SETUP.md](docs/SETUP.md).
+
+Current status and remaining work: [docs/PROGRESS.md](docs/PROGRESS.md).

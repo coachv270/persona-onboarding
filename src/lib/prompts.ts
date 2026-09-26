@@ -31,15 +31,11 @@ Current onboarding state (authoritative — do not re-ask for known items):
 ${describeState(state)}`;
 }
 
-// Called with the state *before* this call attempt is counted.
+// Greeting for a callback after a dropped call; the first call uses the
+// dashboard's first message. Called with the state *before* this attempt is counted.
 export function voiceFirstMessage(state: OnboardingState): string {
   const me = state.agentName ?? "your new assistant";
-  if (state.call.attempts > 0) {
-    return state.userName
-      ? `Hey ${state.userName}, it's ${me} again — sorry we got cut off. Where were we?`
-      : `Hi, it's ${me} again — sorry we got cut off! Where were we?`;
-  }
   return state.userName
-    ? `Hi ${state.userName}! It's ${me}. Thanks for hopping on — got a couple of minutes?`
-    : `Hi there, it's ${me}! Thanks for hopping on. What should I call you?`;
+    ? `Hey ${state.userName}, it's ${me} again — sorry we got cut off. Where were we?`
+    : `Hi, it's ${me} again — sorry we got cut off! Where were we?`;
 }

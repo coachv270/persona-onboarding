@@ -121,7 +121,9 @@ export function VoiceCall({ state, dispatch, onTranscript, onEnded, onDecline }:
           agent_name: snapshot.agentName ?? "your assistant",
           known_info: describeState(snapshot),
         },
-        overrides: { agent: { firstMessage: voiceFirstMessage(snapshot) } },
+        ...(snapshot.call.attempts > 0 && {
+          overrides: { agent: { firstMessage: voiceFirstMessage(snapshot) } },
+        }),
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
